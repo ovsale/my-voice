@@ -3,8 +3,8 @@
 <plist version="1.0">
 <dict>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Tambourine needs microphone access for voice dictation.</string>
+	<string>My Voice needs microphone access for voice dictation.</string>
 	<key>NSAccessibilityUsageDescription</key>
-	<string>Tambourine needs accessibility access to type dictated text into other applications.</string>
+	<string>My Voice needs accessibility access to type dictated text into other applications.</string>
 </dict>
 </plist>

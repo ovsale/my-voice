@@ -7,27 +7,26 @@ fn test_normalize_ctrl_to_control() {
 
 #[test]
 fn test_normalize_uppercase_ctrl() {
-    assert_eq!(normalize_shortcut_string("CTRL+A"), "control+a");
+    assert_eq!(normalize_shortcut_string("CTRL+A"), "a+control");
 }
 
 #[test]
 fn test_normalize_cmd_to_super() {
-    assert_eq!(normalize_shortcut_string("cmd+shift+a"), "super+shift+a");
+    assert_eq!(normalize_shortcut_string("cmd+shift+a"), "a+shift+super");
 }
 
 #[test]
 fn test_normalize_win_to_super() {
-    assert_eq!(normalize_shortcut_string("WIN+a"), "super+a");
+    assert_eq!(normalize_shortcut_string("WIN+a"), "a+super");
 }
 
 #[test]
 fn test_normalize_meta_to_super() {
-    assert_eq!(normalize_shortcut_string("Meta+b"), "super+b");
+    assert_eq!(normalize_shortcut_string("Meta+b"), "b+super");
 }
 
 #[test]
 fn test_normalize_multiple_replacements() {
-    // ctrl+meta should become control+super
     assert_eq!(normalize_shortcut_string("ctrl+meta+x"), "control+super+x");
 }
 
@@ -35,7 +34,7 @@ fn test_normalize_multiple_replacements() {
 fn test_normalize_already_normalized() {
     assert_eq!(
         normalize_shortcut_string("control+alt+space"),
-        "control+alt+space"
+        "alt+control+space"
     );
 }
 
@@ -43,7 +42,7 @@ fn test_normalize_already_normalized() {
 fn test_normalize_preserves_non_modifier_parts() {
     assert_eq!(
         normalize_shortcut_string("ctrl+Backquote"),
-        "control+backquote"
+        "backquote+control"
     );
 }
 

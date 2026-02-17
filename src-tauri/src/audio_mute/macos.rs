@@ -6,9 +6,10 @@
 use super::{AudioControlError, SystemAudioControl};
 use objc2_core_audio::{
     kAudioDevicePropertyMute, kAudioDevicePropertyScopeOutput,
-    kAudioHardwarePropertyDefaultOutputDevice, kAudioObjectPropertyElementMain,
-    kAudioObjectPropertyScopeGlobal, kAudioObjectSystemObject, AudioObjectGetPropertyData,
-    AudioObjectPropertyAddress, AudioObjectSetPropertyData,
+    kAudioDevicePropertyVolumeScalar, kAudioHardwarePropertyDefaultOutputDevice,
+    kAudioObjectPropertyElementMain, kAudioObjectPropertyScopeGlobal,
+    kAudioObjectSystemObject, AudioObjectGetPropertyData, AudioObjectPropertyAddress,
+    AudioObjectSetPropertyData,
 };
 use std::ffi::c_void;
 use std::ptr::NonNull;
@@ -128,6 +129,67 @@ impl MacOSAudioController {
 
         Ok(())
     }
+
+    /// Get an f32 property from the default output device.
+    fn get_f32_property(&self, selector: u32) -> Result<f32, AudioControlError> {
+        let address = AudioObjectPropertyAddress {
+            mSelector: selector,
+            mScope: kAudioDevicePropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain,
+        };
+
+        let mut value: f32 = 0.0;
+        let mut size = 4u32;
+
+        let status = unsafe {
+            AudioObjectGetPropertyData(
+                self.device_id,
+                NonNull::new((&raw const address).cast_mut()).unwrap(),
+                0,
+                std::ptr::null(),
+                NonNull::new(&raw mut size).unwrap(),
+                NonNull::new((&raw mut value).cast::<c_void>()).unwrap(),
+            )
+        };
+
+        if status != 0 {
+            return Err(AudioControlError::GetPropertyFailed(format!(
+                "OSStatus: {status}"
+            )));
+        }
+
+        Ok(value)
+    }
+
+    /// Set an f32 property on the default output device.
+    fn set_f32_property(&self, selector: u32, value: f32) -> Result<(), AudioControlError> {
+        let address = AudioObjectPropertyAddress {
+            mSelector: selector,
+            mScope: kAudioDevicePropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain,
+        };
+
+        let size = 4u32;
+
+        let status = unsafe {
+            AudioObjectSetPropertyData(
+                self.device_id,
+                NonNull::new((&raw const address).cast_mut()).unwrap(),
+                0,
+                std::ptr::null(),
+                size,
+                NonNull::new((&raw const value).cast_mut().cast::<c_void>()).unwrap(),
+            )
+        };
+
+        if status != 0 {
+            return Err(AudioControlError::SetPropertyFailed(format!(
+                "OSStatus: {status}"
+            )));
+        }
+
+        Ok(())
+    }
 }
 
 impl SystemAudioControl for MacOSAudioController {
@@ -138,5 +200,13 @@ impl SystemAudioControl for MacOSAudioController {
 
     fn set_muted(&self, muted: bool) -> Result<(), AudioControlError> {
         self.set_u32_property(kAudioDevicePropertyMute, u32::from(muted))
+    }
+
+    fn get_volume(&self) -> Result<f32, AudioControlError> {
+        self.get_f32_property(kAudioDevicePropertyVolumeScalar)
+    }
+
+    fn set_volume(&self, volume: f32) -> Result<(), AudioControlError> {
+        self.set_f32_property(kAudioDevicePropertyVolumeScalar, volume.clamp(0.0, 1.0))
     }
 }

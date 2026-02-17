@@ -146,7 +146,7 @@ export interface AppSettings {
 	selected_mic_id: string | null;
 	sound_enabled: boolean;
 	cleanup_prompt_sections: CleanupPromptSections | null;
-	auto_mute_audio: boolean;
+	volume_reduction_percent: number;
 	openai_api_key: string | null;
 	/** LLM formatting enabled (true = format with LLM, false = raw transcription) */
 	llm_formatting_enabled: boolean;
@@ -280,8 +280,8 @@ export const tauriAPI = {
 		return invoke("update_cleanup_prompt_sections", { sections });
 	},
 
-	async updateAutoMuteAudio(enabled: boolean): Promise<void> {
-		return invoke("update_auto_mute_audio", { enabled });
+	async updateVolumeReductionPercent(percent: number): Promise<void> {
+		return invoke("update_volume_reduction_percent", { percent });
 	},
 
 	async updateOpenaiApiKey(apiKey: string | null): Promise<void> {

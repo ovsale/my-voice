@@ -154,13 +154,13 @@ pub(crate) fn save_setting_to_store<T: serde::Serialize>(
     Ok(())
 }
 
-/// Start recording with sound and audio mute handling
+/// Start recording with sound and volume reduction handling
 #[cfg(desktop)]
 fn start_recording(
     app: &AppHandle,
     sound_enabled: bool,
     audio_mute_manager: Option<&AudioMuteManager>,
-    auto_mute_audio: bool,
+    volume_reduction_percent: u8,
     source: &str,
 ) {
     log::info!("{source}: starting recording");
@@ -168,10 +168,10 @@ fn start_recording(
         audio::play_sound(audio::SoundType::RecordingStart);
         std::thread::sleep(std::time::Duration::from_millis(150));
     }
-    if auto_mute_audio {
+    if volume_reduction_percent > 0 {
         if let Some(manager) = audio_mute_manager {
-            if let Err(e) = manager.mute() {
-                log::warn!("Failed to mute audio: {e}");
+            if let Err(e) = manager.reduce_volume(volume_reduction_percent) {
+                log::warn!("Failed to reduce volume: {e}");
             }
         }
     }
@@ -192,20 +192,20 @@ fn start_recording(
     let _ = app.emit(EventName::RecordingStart.as_str(), ());
 }
 
-/// Stop recording with sound and audio unmute handling
+/// Stop recording with sound and volume restore handling
 #[cfg(desktop)]
 fn stop_recording(
     app: &AppHandle,
     sound_enabled: bool,
     audio_mute_manager: Option<&AudioMuteManager>,
-    auto_mute_audio: bool,
+    volume_reduction_percent: u8,
     source: &str,
 ) {
     log::info!("{source}: stopping recording");
-    if auto_mute_audio {
+    if volume_reduction_percent > 0 {
         if let Some(manager) = audio_mute_manager {
-            if let Err(e) = manager.unmute() {
-                log::warn!("Failed to unmute audio: {e}");
+            if let Err(e) = manager.restore_volume() {
+                log::warn!("Failed to restore volume: {e}");
             }
         }
     }
@@ -272,7 +272,7 @@ pub fn handle_shortcut_event(app: &AppHandle, shortcut: &Shortcut, event: TauriS
 
     let state = app.state::<AppState>();
     let sound_enabled: bool = get_setting_from_store(app, LocalOnlySetting::SoundEnabled, true);
-    let auto_mute_audio: bool = get_setting_from_store(app, LocalOnlySetting::AutoMuteAudio, false);
+    let volume_reduction_percent: u8 = get_setting_from_store(app, LocalOnlySetting::VolumeReductionPercent, 0);
     let audio_mute_manager = app.try_state::<AudioMuteManager>();
 
     let mut current_state = state.shortcut_state.lock().unwrap();
@@ -287,7 +287,7 @@ pub fn handle_shortcut_event(app: &AppHandle, shortcut: &Shortcut, event: TauriS
                 app,
                 sound_enabled,
                 audio_mute_manager.as_deref(),
-                auto_mute_audio,
+                volume_reduction_percent,
                 "Toggle",
             );
             ShortcutState::RecordingViaToggle
@@ -300,7 +300,7 @@ pub fn handle_shortcut_event(app: &AppHandle, shortcut: &Shortcut, event: TauriS
                 app,
                 sound_enabled,
                 audio_mute_manager.as_deref(),
-                auto_mute_audio,
+                volume_reduction_percent,
                 "Toggle",
             );
             ShortcutState::Idle
@@ -310,7 +310,7 @@ pub fn handle_shortcut_event(app: &AppHandle, shortcut: &Shortcut, event: TauriS
                 app,
                 sound_enabled,
                 audio_mute_manager.as_deref(),
-                auto_mute_audio,
+                volume_reduction_percent,
                 "Hold",
             );
             ShortcutState::RecordingViaHold
@@ -320,7 +320,7 @@ pub fn handle_shortcut_event(app: &AppHandle, shortcut: &Shortcut, event: TauriS
                 app,
                 sound_enabled,
                 audio_mute_manager.as_deref(),
-                auto_mute_audio,
+                volume_reduction_percent,
                 "Hold",
             );
             ShortcutState::Idle
@@ -445,7 +445,7 @@ pub fn run() {
             commands::settings::update_selected_mic,
             commands::settings::update_sound_enabled,
             commands::settings::update_cleanup_prompt_sections,
-            commands::settings::update_auto_mute_audio,
+            commands::settings::update_volume_reduction_percent,
             commands::settings::update_openai_api_key,
             commands::settings::update_llm_formatting_enabled,
             commands::settings::update_send_active_app_context_enabled,

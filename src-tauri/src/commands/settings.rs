@@ -167,7 +167,7 @@ pub fn get_settings(app: AppHandle) -> Result<AppSettings, String> {
             LocalOnlySetting::CleanupPromptSections,
             None,
         ),
-        auto_mute_audio: get_setting_from_store(&app, LocalOnlySetting::AutoMuteAudio, false),
+        volume_reduction_percent: get_setting_from_store(&app, LocalOnlySetting::VolumeReductionPercent, 0u8),
         openai_api_key: get_setting_from_store(&app, LocalOnlySetting::OpenaiApiKey, None),
         llm_formatting_enabled: get_setting_from_store(
             &app,
@@ -275,16 +275,17 @@ pub async fn update_cleanup_prompt_sections(
 
 #[cfg(desktop)]
 #[tauri::command]
-pub async fn update_auto_mute_audio(app: AppHandle, enabled: bool) -> Result<(), String> {
-    persist_setting(&app, LocalOnlySetting::AutoMuteAudio, &enabled)
+pub async fn update_volume_reduction_percent(app: AppHandle, percent: u8) -> Result<(), String> {
+    let clamped = percent.min(100);
+    persist_setting(&app, LocalOnlySetting::VolumeReductionPercent, &clamped)
         .map_err(|error| format!("{error:#}"))?;
-    log::info!("Updated auto mute audio: {enabled}");
+    log::info!("Updated volume reduction percent: {clamped}%");
     Ok(())
 }
 
 #[cfg(not(desktop))]
 #[tauri::command]
-pub async fn update_auto_mute_audio(_app: AppHandle, _enabled: bool) -> Result<(), String> {
+pub async fn update_volume_reduction_percent(_app: AppHandle, _percent: u8) -> Result<(), String> {
     Ok(())
 }
 

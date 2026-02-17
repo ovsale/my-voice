@@ -78,4 +78,28 @@ impl SystemAudioControl for WindowsAudioController {
                 .map_err(|e| AudioControlError::SetPropertyFailed(format!("SetMute: {e}")))
         }
     }
+
+    fn get_volume(&self) -> Result<f32, AudioControlError> {
+        unsafe {
+            self.endpoint_volume
+                .GetMasterVolumeLevelScalar()
+                .map_err(|e| {
+                    AudioControlError::GetPropertyFailed(format!(
+                        "GetMasterVolumeLevelScalar: {e}"
+                    ))
+                })
+        }
+    }
+
+    fn set_volume(&self, volume: f32) -> Result<(), AudioControlError> {
+        unsafe {
+            self.endpoint_volume
+                .SetMasterVolumeLevelScalar(volume.clamp(0.0, 1.0), std::ptr::null())
+                .map_err(|e| {
+                    AudioControlError::SetPropertyFailed(format!(
+                        "SetMasterVolumeLevelScalar: {e}"
+                    ))
+                })
+        }
+    }
 }

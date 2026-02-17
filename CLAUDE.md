@@ -42,7 +42,7 @@ src-tauri/src/                # Rust backend
     overlay.rs                # Overlay window resize
     export_import.rs          # Settings/history export/import
   active_app_context/         # Detect focused window (macOS Accessibility API)
-  audio_mute/                 # Mute system audio during recording
+  audio_mute/                 # Reduce/mute system audio volume during recording
   history.rs                  # SQLite storage
   settings.rs                 # Settings schema (hotkeys, API key, prompts)
   state.rs                    # App state (ShortcutState machine)
@@ -71,6 +71,12 @@ src-tauri/src/                # Rust backend
 - **UTF-8 log truncation:** use `{:.120}` format (char-based), never `&s[..120]` (byte-based) — panics on multibyte chars
 - Async tasks from non-async contexts use `tauri::async_runtime::spawn` (not `tokio::spawn`)
 - Audio thread communicates via `std::sync::mpsc` channels (cpal::Stream is not Send on macOS)
+- **Volume reduction:** `volume_reduction_percent` setting (0–100, default 0). Uses perceptual cubic curve (`scale = linear³`) so the slider feels linear to human hearing. At 100% uses system mute; otherwise adjusts volume via `kAudioDevicePropertyVolumeScalar` (macOS) / `SetMasterVolumeLevelScalar` (Windows). Original volume is saved and restored after recording.
+
+## Working with Claude
+
+- **No plan mode** unless explicitly asked. Default: discuss the task first, then implement directly.
+- Workflow: discuss what needs to be done → agree on approach → implement. No autonomous planning.
 
 ## Build Commands
 
@@ -82,6 +88,6 @@ pnpm tauri build        # Release build (optimized, slow)
 
 ## Hotkeys (defaults)
 
-- `Ctrl+Shift+H` — Toggle recording (press to start, press again to stop)
+- `Ctrl+Alt+Space` — Toggle recording (press to start, press again to stop)
 - `Ctrl+Alt+Backquote` — Hold to record, release to stop
 - `Ctrl+Alt+Period` — Paste last transcription

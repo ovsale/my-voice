@@ -1,16 +1,14 @@
 use std::sync::{Arc, Mutex};
 
-use super::shared::{
-    decide_mute_transition, decide_unmute_transition, MuteTransitionAction, MuteTransitionDecision,
-};
-use super::{AudioControlError, AudioMuteManager, MuteState, SystemAudioControl};
+use super::{AudioControlError, AudioMuteManager, SystemAudioControl};
 
 #[derive(Debug, Default)]
 struct FakeAudioControllerState {
     is_muted: bool,
-    is_muted_error: Option<String>,
-    set_muted_error: Option<String>,
+    volume: f32,
     set_muted_calls: Vec<bool>,
+    set_volume_calls: Vec<f32>,
+    is_muted_error: Option<String>,
 }
 
 #[derive(Clone)]
@@ -30,138 +28,160 @@ impl SystemAudioControl for FakeAudioController {
         if let Some(error_message) = &state.is_muted_error {
             return Err(AudioControlError::GetPropertyFailed(error_message.clone()));
         }
-
         Ok(state.is_muted)
     }
 
     fn set_muted(&self, muted: bool) -> Result<(), AudioControlError> {
         let mut state = self.state.lock().unwrap();
         state.set_muted_calls.push(muted);
-        if let Some(error_message) = &state.set_muted_error {
-            return Err(AudioControlError::SetPropertyFailed(error_message.clone()));
-        }
-
         state.is_muted = muted;
+        Ok(())
+    }
+
+    fn get_volume(&self) -> Result<f32, AudioControlError> {
+        let state = self.state.lock().unwrap();
+        Ok(state.volume)
+    }
+
+    fn set_volume(&self, volume: f32) -> Result<(), AudioControlError> {
+        let mut state = self.state.lock().unwrap();
+        state.set_volume_calls.push(volume);
+        state.volume = volume;
         Ok(())
     }
 }
 
 #[test]
-fn decide_mute_transition_for_not_muting_and_already_muted_returns_no_op() {
-    let transition_decision = decide_mute_transition(MuteState::NotMuting, true);
-    assert_eq!(
-        transition_decision,
-        MuteTransitionDecision {
-            next_state: MuteState::AudioWasAlreadyMutedByUser,
-            action: MuteTransitionAction::NoOp,
-        }
-    );
+fn reduce_volume_full_mute_uses_set_muted() {
+    let state = Arc::new(Mutex::new(FakeAudioControllerState {
+        volume: 0.8,
+        ..Default::default()
+    }));
+    let manager = AudioMuteManager::from_controller(Box::new(FakeAudioController::new(state.clone())));
+
+    manager.reduce_volume(100).unwrap();
+
+    let s = state.lock().unwrap();
+    assert_eq!(s.set_muted_calls, vec![true]);
+    assert!(s.set_volume_calls.is_empty());
 }
 
 #[test]
-fn decide_mute_transition_for_not_muting_and_not_muted_sets_muted() {
-    let transition_decision = decide_mute_transition(MuteState::NotMuting, false);
-    assert_eq!(
-        transition_decision,
-        MuteTransitionDecision {
-            next_state: MuteState::MutedByUs,
-            action: MuteTransitionAction::SetMuted(true),
-        }
-    );
+fn reduce_volume_partial_sets_volume_with_cubic_curve() {
+    let state = Arc::new(Mutex::new(FakeAudioControllerState {
+        volume: 0.8,
+        ..Default::default()
+    }));
+    let manager = AudioMuteManager::from_controller(Box::new(FakeAudioController::new(state.clone())));
+
+    manager.reduce_volume(50).unwrap();
+
+    let s = state.lock().unwrap();
+    assert!(s.set_muted_calls.is_empty());
+    assert_eq!(s.set_volume_calls.len(), 1);
+    // Cubic curve: 0.5^3 = 0.125, target = 0.8 * 0.125 = 0.1
+    assert!((s.set_volume_calls[0] - 0.1).abs() < 0.01);
 }
 
 #[test]
-fn decide_unmute_transition_from_muted_by_us_unmutes_and_resets_state() {
-    let transition_decision = decide_unmute_transition(MuteState::MutedByUs);
-    assert_eq!(
-        transition_decision,
-        MuteTransitionDecision {
-            next_state: MuteState::NotMuting,
-            action: MuteTransitionAction::SetMuted(false),
-        }
-    );
+fn reduce_volume_zero_is_noop() {
+    let state = Arc::new(Mutex::new(FakeAudioControllerState {
+        volume: 0.8,
+        ..Default::default()
+    }));
+    let manager = AudioMuteManager::from_controller(Box::new(FakeAudioController::new(state.clone())));
+
+    // reduce_volume(0) should not be called in practice (lib.rs guards with > 0),
+    // but if called, cubic curve: 1.0^3 = 1.0, target = 0.8 * 1.0 = 0.8
+    manager.reduce_volume(0).unwrap();
+
+    let s = state.lock().unwrap();
+    assert!(s.set_muted_calls.is_empty());
+    assert_eq!(s.set_volume_calls.len(), 1);
+    assert!((s.set_volume_calls[0] - 0.8).abs() < 0.01);
 }
 
 #[test]
-fn decide_unmute_transition_from_user_muted_keeps_audio_muted_and_resets_state() {
-    let transition_decision = decide_unmute_transition(MuteState::AudioWasAlreadyMutedByUser);
-    assert_eq!(
-        transition_decision,
-        MuteTransitionDecision {
-            next_state: MuteState::NotMuting,
-            action: MuteTransitionAction::NoOp,
-        }
-    );
+fn restore_volume_after_full_mute() {
+    let state = Arc::new(Mutex::new(FakeAudioControllerState {
+        volume: 0.7,
+        ..Default::default()
+    }));
+    let manager = AudioMuteManager::from_controller(Box::new(FakeAudioController::new(state.clone())));
+
+    manager.reduce_volume(100).unwrap();
+    manager.restore_volume().unwrap();
+
+    let s = state.lock().unwrap();
+    assert_eq!(s.set_muted_calls, vec![true, false]); // mute then unmute
+    assert_eq!(s.set_volume_calls.len(), 1);
+    assert!((s.set_volume_calls[0] - 0.7).abs() < 0.01); // restored to original
 }
 
 #[test]
-fn mute_and_unmute_perform_expected_set_muted_calls() {
-    let fake_controller_state = Arc::new(Mutex::new(FakeAudioControllerState::default()));
-    let fake_controller = FakeAudioController::new(fake_controller_state.clone());
-    let audio_mute_manager = AudioMuteManager::from_controller(Box::new(fake_controller));
+fn restore_volume_after_partial_reduction() {
+    let state = Arc::new(Mutex::new(FakeAudioControllerState {
+        volume: 0.6,
+        ..Default::default()
+    }));
+    let manager = AudioMuteManager::from_controller(Box::new(FakeAudioController::new(state.clone())));
 
-    audio_mute_manager.mute().unwrap();
-    audio_mute_manager.unmute().unwrap();
+    manager.reduce_volume(80).unwrap();
+    manager.restore_volume().unwrap();
 
-    let state_after_operations = fake_controller_state.lock().unwrap();
-    assert_eq!(state_after_operations.set_muted_calls, vec![true, false]);
+    let s = state.lock().unwrap();
+    assert!(s.set_muted_calls.is_empty()); // no mute calls for partial reduction
+    assert_eq!(s.set_volume_calls.len(), 2);
+    // Cubic curve: 0.2^3 = 0.008, target = 0.6 * 0.008 = 0.0048
+    assert!((s.set_volume_calls[0] - 0.0048).abs() < 0.01);
+    assert!((s.set_volume_calls[1] - 0.6).abs() < 0.01); // restored
 }
 
 #[test]
-fn mute_is_idempotent_when_already_muted_by_manager() {
-    let fake_controller_state = Arc::new(Mutex::new(FakeAudioControllerState::default()));
-    let fake_controller = FakeAudioController::new(fake_controller_state.clone());
-    let audio_mute_manager = AudioMuteManager::from_controller(Box::new(fake_controller));
-
-    audio_mute_manager.mute().unwrap();
-    audio_mute_manager.mute().unwrap();
-
-    let state_after_operations = fake_controller_state.lock().unwrap();
-    assert_eq!(state_after_operations.set_muted_calls, vec![true]);
-}
-
-#[test]
-fn mute_and_unmute_preserve_user_muted_audio() {
-    let fake_controller_state = Arc::new(Mutex::new(FakeAudioControllerState {
+fn skips_reduction_when_already_muted_by_user() {
+    let state = Arc::new(Mutex::new(FakeAudioControllerState {
         is_muted: true,
+        volume: 0.5,
         ..Default::default()
     }));
-    let fake_controller = FakeAudioController::new(fake_controller_state.clone());
-    let audio_mute_manager = AudioMuteManager::from_controller(Box::new(fake_controller));
+    let manager = AudioMuteManager::from_controller(Box::new(FakeAudioController::new(state.clone())));
 
-    audio_mute_manager.mute().unwrap();
-    audio_mute_manager.unmute().unwrap();
+    manager.reduce_volume(100).unwrap();
+    manager.restore_volume().unwrap();
 
-    let state_after_operations = fake_controller_state.lock().unwrap();
-    assert_eq!(state_after_operations.set_muted_calls, Vec::<bool>::new());
-    assert!(state_after_operations.is_muted);
+    let s = state.lock().unwrap();
+    assert!(s.set_muted_calls.is_empty());
+    assert!(s.set_volume_calls.is_empty());
 }
 
 #[test]
-fn mute_falls_back_to_not_muted_when_is_muted_query_fails() {
-    let fake_controller_state = Arc::new(Mutex::new(FakeAudioControllerState {
-        is_muted_error: Some("query failure".to_string()),
+fn reduce_is_idempotent() {
+    let state = Arc::new(Mutex::new(FakeAudioControllerState {
+        volume: 0.8,
         ..Default::default()
     }));
-    let fake_controller = FakeAudioController::new(fake_controller_state.clone());
-    let audio_mute_manager = AudioMuteManager::from_controller(Box::new(fake_controller));
+    let manager = AudioMuteManager::from_controller(Box::new(FakeAudioController::new(state.clone())));
 
-    audio_mute_manager.mute().unwrap();
+    manager.reduce_volume(50).unwrap();
+    manager.reduce_volume(50).unwrap(); // second call should be ignored
 
-    let state_after_operations = fake_controller_state.lock().unwrap();
-    assert_eq!(state_after_operations.set_muted_calls, vec![true]);
+    let s = state.lock().unwrap();
+    assert_eq!(s.set_volume_calls.len(), 1);
 }
 
 #[test]
-fn drop_unmutes_when_manager_muted_audio() {
-    let fake_controller_state = Arc::new(Mutex::new(FakeAudioControllerState::default()));
-    let fake_controller = FakeAudioController::new(fake_controller_state.clone());
+fn drop_restores_volume() {
+    let state = Arc::new(Mutex::new(FakeAudioControllerState {
+        volume: 0.9,
+        ..Default::default()
+    }));
 
     {
-        let audio_mute_manager = AudioMuteManager::from_controller(Box::new(fake_controller));
-        audio_mute_manager.mute().unwrap();
-    }
+        let manager = AudioMuteManager::from_controller(Box::new(FakeAudioController::new(state.clone())));
+        manager.reduce_volume(100).unwrap();
+    } // drop here
 
-    let state_after_drop = fake_controller_state.lock().unwrap();
-    assert_eq!(state_after_drop.set_muted_calls, vec![true, false]);
+    let s = state.lock().unwrap();
+    assert_eq!(s.set_muted_calls, vec![true, false]); // muted, then unmuted on drop
+    assert!((s.set_volume_calls[0] - 0.9).abs() < 0.01); // restored on drop
 }
