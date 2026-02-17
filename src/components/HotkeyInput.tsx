@@ -3,6 +3,7 @@ import { AlertCircle } from "lucide-react";
 import { useEffect } from "react";
 import { useRecordHotkeys } from "react-hotkeys-hook";
 import type { HotkeyConfig } from "../lib/tauri";
+import { tauriAPI } from "../lib/tauri";
 import {
 	type MutationStatus,
 	StatusIndicator,
@@ -204,6 +205,7 @@ export function HotkeyInput({
 				event.preventDefault();
 				stop();
 				onStopRecording?.();
+				tauriAPI.registerShortcuts();
 			}
 		};
 
@@ -226,6 +228,7 @@ export function HotkeyInput({
 			onChange(config);
 			stop();
 			onStopRecording?.();
+			// Shortcuts will be re-registered by the update_hotkey backend
 		}
 	}, [keys, isRecording, onChange, stop, onStopRecording, value.enabled]);
 
@@ -240,14 +243,15 @@ export function HotkeyInput({
 
 	const handleClick = () => {
 		if (disabled) return;
-		// Allow changing hotkey even when disabled (enabled=false)
-		// so user can fix conflicts
 
 		if (isRecording) {
-			// Clicking again cancels
 			stop();
 			onStopRecording?.();
+			// Re-register global shortcuts after recording
+			tauriAPI.registerShortcuts();
 		} else {
+			// Unregister global shortcuts so they don't intercept key capture
+			tauriAPI.unregisterShortcuts();
 			start();
 			onStartRecording?.();
 		}

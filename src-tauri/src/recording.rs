@@ -242,7 +242,7 @@ async fn run_pipeline(
     let raw_text = stt::transcribe(http_client, &api_key, wav_data, None)
         .await
         .context("Speech-to-text failed")?;
-    log::info!("Transcription: {}", &raw_text[..raw_text.len().min(120)]);
+    log::info!("Transcription: {:.120}", raw_text);
 
     if raw_text.trim().is_empty() {
         log::info!("Empty transcription, skipping");
@@ -255,7 +255,7 @@ async fn run_pipeline(
         let system_prompt = build_system_prompt(app);
         match llm::format_text(http_client, &api_key, &system_prompt, &raw_text).await {
             Ok(formatted) => {
-                log::info!("LLM formatted: {}", &formatted[..formatted.len().min(120)]);
+                log::info!("LLM formatted: {:.120}", formatted);
                 formatted
             }
             Err(e) => {

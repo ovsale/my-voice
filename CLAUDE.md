@@ -62,11 +62,13 @@ src-tauri/src/                # Rust backend
 
 ## Key Conventions
 
-- Rust events emitted via `app.emit()` with snake_case payload serialization
-- Frontend listens via typed `listenEvent()` wrapper in `lib/events.ts`
+- **Settings reactivity:** `persist_setting()` emits `SettingsChanged` after every save. Frontend `useSettings` hook auto-refreshes on this event — no manual emit or local state patching needed in components.
+- **Event payloads:** Rust emits plain values (e.g. `RecordingStatus::Recording` → `"recording"`), not wrapped objects. Frontend `EventPayloads` types must match (e.g. `RecordingStatus`, not `{ status: RecordingStatus }`).
 - Event names must match between `src-tauri/src/events.rs` and `src/lib/events.ts`
-- Hotkey strings are normalized (lowercased + sorted) for reliable matching
-- Text paste uses raw macOS keycode `Key::Other(0x09)` (kVK_ANSI_V) to work with any keyboard layout
+- **Hotkey strings:** normalized (lowercased + parts sorted alphabetically) for reliable matching regardless of modifier order
+- **Hotkey recording:** `HotkeyInput` calls `unregisterShortcuts()` before capturing keys and `registerShortcuts()` after, so global shortcuts don't intercept the key combo being recorded
+- **Text paste:** uses raw macOS keycode `Key::Other(0x09)` (kVK_ANSI_V) — layout-independent, works with any keyboard layout (Russian, etc.)
+- **UTF-8 log truncation:** use `{:.120}` format (char-based), never `&s[..120]` (byte-based) — panics on multibyte chars
 - Async tasks from non-async contexts use `tauri::async_runtime::spawn` (not `tokio::spawn`)
 - Audio thread communicates via `std::sync::mpsc` channels (cpal::Stream is not Send on macOS)
 

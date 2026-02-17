@@ -4,7 +4,7 @@ use crate::settings::{
 };
 use crate::state::{AppState, ShortcutErrors, ShortcutRegistrationResult};
 use anyhow::{anyhow, Context};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 #[cfg(desktop)]
 use crate::active_app_context::sync_focus_watcher_enabled;
@@ -56,7 +56,9 @@ fn persist_setting<T: serde::Serialize>(
             "Failed to persist setting '{}'",
             setting.storage_key_name()
         )
-    })
+    })?;
+    let _ = app.emit(crate::events::EventName::SettingsChanged.as_str(), ());
+    Ok(())
 }
 
 #[cfg(desktop)]
@@ -205,6 +207,8 @@ pub async fn update_hotkey(
         hotkey_type.display_name(),
         config.to_shortcut_string()
     );
+    // Re-register shortcuts so the new hotkey takes effect immediately
+    crate::do_register_shortcuts(&app);
     Ok(())
 }
 
