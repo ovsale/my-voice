@@ -1,0 +1,38 @@
+@import "tailwindcss";
+
+/* Overlay-specific styles */
+html,
+body,
+#root {
+	background: transparent;
+}
+
+body {
+	overflow: hidden;
+	margin: 0;
+	padding: 0;
+}
+
+#root {
+	width: 100%;
+	height: 100%;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+/* Hide tooltips/popups in overlay - use high specificity instead of !important */
+html body [data-radix-popper-content-wrapper],
+html body [role="tooltip"],
+#root [data-radix-popper-content-wrapper],
+#root [role="tooltip"] {
+	display: none;
+	visibility: hidden;
+	opacity: 0;
+	pointer-events: none;
+}
+
+@keyframes pulse {
+	0%, 100% { opacity: 1; transform: scale(1); }
+	50% { opacity: 0.5; transform: scale(1.2); }
+}

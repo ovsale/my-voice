@@ -105,6 +105,8 @@ Key difference from Tambourine: **no server process, no WebRTC**. Rust backend c
 
 ## What to Reuse from Tambourine
 
+checkouted at: /Volumes/Data/Workin/Workspaces/VSCode/tambourine-voice
+
 ### Take as-is (or with minor adaptation)
 
 | What | Source | Notes |

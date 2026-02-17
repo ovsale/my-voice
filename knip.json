@@ -1,0 +1,6 @@
+{
+	"entry": ["src/overlay-main.tsx", "src/overlay-global.css"],
+	"project": ["**/*.{js,ts,jsx,tsx}"],
+	"ignore": ["public/**"],
+	"ignoreExportsUsedInFile": true
+}

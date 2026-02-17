@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Tambourine needs microphone access for voice dictation.</string>
+	<key>NSAccessibilityUsageDescription</key>
+	<string>Tambourine needs accessibility access to type dictated text into other applications.</string>
+</dict>
+</plist>
