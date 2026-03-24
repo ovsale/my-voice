@@ -464,6 +464,7 @@ pub fn run() {
             commands::export_import::import_settings,
             commands::export_import::import_history,
             commands::export_import::factory_reset,
+            commands::settings::update_overlay_size_px,
             commands::overlay::resize_overlay,
             recording::start_recording_cmd,
             recording::stop_recording_cmd,

@@ -152,6 +152,8 @@ export interface AppSettings {
 	llm_formatting_enabled: boolean;
 	/** Send active app context to server for prompt injection */
 	send_active_app_context_enabled: boolean;
+	/** Overlay size in pixels (24–128, default 48) */
+	overlay_size_px: number;
 }
 
 // ============================================================================
@@ -294,6 +296,10 @@ export const tauriAPI = {
 
 	async updateSendActiveAppContextEnabled(enabled: boolean): Promise<void> {
 		return invoke("update_send_active_app_context_enabled", { enabled });
+	},
+
+	async updateOverlaySizePx(size: number): Promise<void> {
+		return invoke("update_overlay_size_px", { size });
 	},
 
 	async listNativeAudioDevices(): Promise<AudioDeviceInfo[]> {

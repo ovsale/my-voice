@@ -36,6 +36,7 @@ pub enum LocalOnlySetting {
     LlmFormattingEnabled,
     CleanupPromptSections,
     SendActiveAppContextEnabled,
+    OverlaySizePx,
 }
 
 impl LocalOnlySetting {
@@ -51,6 +52,7 @@ impl LocalOnlySetting {
             Self::LlmFormattingEnabled => "llm_formatting_enabled",
             Self::CleanupPromptSections => "cleanup_prompt_sections",
             Self::SendActiveAppContextEnabled => "send_active_app_context_enabled",
+            Self::OverlaySizePx => "overlay_size_px",
         }
     }
 }
@@ -84,6 +86,10 @@ fn default_enabled() -> bool {
 /// Disable boolean field by default (needed for serde)
 fn default_disabled() -> bool {
     false
+}
+
+fn default_overlay_size_px() -> u32 {
+    48
 }
 
 /// Configuration for a hotkey combination
@@ -283,6 +289,8 @@ pub struct AppSettings {
     pub llm_formatting_enabled: bool,
     #[serde(default = "default_disabled")]
     pub send_active_app_context_enabled: bool,
+    #[serde(default = "default_overlay_size_px")]
+    pub overlay_size_px: u32,
 }
 
 impl Default for AppSettings {
@@ -298,6 +306,7 @@ impl Default for AppSettings {
             openai_api_key: None,
             llm_formatting_enabled: true,
             send_active_app_context_enabled: false,
+            overlay_size_px: 48,
         }
     }
 }

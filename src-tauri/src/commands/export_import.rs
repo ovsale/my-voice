@@ -36,6 +36,12 @@ pub struct SettingsExportData {
     pub openai_api_key: Option<String>,
     pub llm_formatting_enabled: bool,
     pub send_active_app_context_enabled: bool,
+    #[serde(default = "default_overlay_size_px")]
+    pub overlay_size_px: u32,
+}
+
+fn default_overlay_size_px() -> u32 {
+    48
 }
 
 impl Default for SettingsExportData {
@@ -56,6 +62,7 @@ impl From<AppSettings> for SettingsExportData {
             openai_api_key: s.openai_api_key,
             llm_formatting_enabled: s.llm_formatting_enabled,
             send_active_app_context_enabled: s.send_active_app_context_enabled,
+            overlay_size_px: s.overlay_size_px,
         }
     }
 }
@@ -73,6 +80,7 @@ impl From<SettingsExportData> for AppSettings {
             openai_api_key: e.openai_api_key,
             llm_formatting_enabled: e.llm_formatting_enabled,
             send_active_app_context_enabled: e.send_active_app_context_enabled,
+            overlay_size_px: e.overlay_size_px,
         }
     }
 }
@@ -345,7 +353,7 @@ pub fn detect_export_file_type(content: String) -> DetectedFileType {
 // SETTING CLASSES FOR IMPORT/EXPORT
 // ============================================================================
 
-const IMPORT_EXPORT_SETTING_CLASSES: [SettingClass; 9] = [
+const IMPORT_EXPORT_SETTING_CLASSES: [SettingClass; 10] = [
     SettingClass::LocalOnly(LocalOnlySetting::ToggleHotkey),
     SettingClass::LocalOnly(LocalOnlySetting::HoldHotkey),
     SettingClass::LocalOnly(LocalOnlySetting::PasteLastHotkey),
@@ -355,6 +363,7 @@ const IMPORT_EXPORT_SETTING_CLASSES: [SettingClass; 9] = [
     SettingClass::LocalOnly(LocalOnlySetting::OpenaiApiKey),
     SettingClass::LocalOnly(LocalOnlySetting::LlmFormattingEnabled),
     SettingClass::LocalOnly(LocalOnlySetting::SendActiveAppContextEnabled),
+    SettingClass::LocalOnly(LocalOnlySetting::OverlaySizePx),
 ];
 
 fn serialized_value_for_setting(
@@ -378,6 +387,9 @@ fn serialized_value_for_setting(
         }
         LocalOnlySetting::SendActiveAppContextEnabled => {
             serde_json::to_value(settings.send_active_app_context_enabled)
+        }
+        LocalOnlySetting::OverlaySizePx => {
+            serde_json::to_value(settings.overlay_size_px)
         }
     };
     val.with_context(|| format!("Failed to serialize '{}'", setting.storage_key_name()))

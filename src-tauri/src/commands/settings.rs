@@ -179,6 +179,7 @@ pub fn get_settings(app: AppHandle) -> Result<AppSettings, String> {
             LocalOnlySetting::SendActiveAppContextEnabled,
             false,
         ),
+        overlay_size_px: get_setting_from_store(&app, LocalOnlySetting::OverlaySizePx, 48u32),
     })
 }
 
@@ -354,6 +355,22 @@ pub async fn update_send_active_app_context_enabled(
     _app: AppHandle,
     _enabled: bool,
 ) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+pub async fn update_overlay_size_px(app: AppHandle, size: u32) -> Result<(), String> {
+    let clamped = size.clamp(24, 128);
+    persist_setting(&app, LocalOnlySetting::OverlaySizePx, &clamped)
+        .map_err(|error| format!("{error:#}"))?;
+    log::info!("Updated overlay size: {clamped}px");
+    Ok(())
+}
+
+#[cfg(not(desktop))]
+#[tauri::command]
+pub async fn update_overlay_size_px(_app: AppHandle, _size: u32) -> Result<(), String> {
     Ok(())
 }
 

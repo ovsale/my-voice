@@ -11,8 +11,11 @@ import "./overlay-global.css";
 
 export default function OverlayApp() {
 	const [status, setStatus] = useState<RecordingStatus>("idle");
+	const [overlaySizePx, setOverlaySizePx] = useState(48);
 	const [containerRef, rect] = useResizeObserver();
 	const hasWindowDragStartedRef = useRef(false);
+
+	const scale = overlaySizePx / 48;
 
 	// Listen for recording status changes from Rust
 	useEffect(() => {
@@ -23,12 +26,31 @@ export default function OverlayApp() {
 		return () => { unlisten?.(); };
 	}, []);
 
-	// Auto-resize overlay
+	// Load overlay size from settings and listen for changes
+	useEffect(() => {
+		const fetchSize = () => {
+			tauriAPI.getSettings().then((s) => {
+				setOverlaySizePx(s.overlay_size_px ?? 48);
+			});
+		};
+		fetchSize();
+
+		let unlisten: (() => void) | undefined;
+		tauriAPI.onSettingsChanged(() => {
+			fetchSize();
+		}).then(fn => { unlisten = fn; });
+		return () => { unlisten?.(); };
+	}, []);
+
+	// Auto-resize overlay window to match visual (scaled) size
 	useEffect(() => {
 		if (rect.width > 0 && rect.height > 0) {
-			tauriAPI.resizeOverlay(Math.ceil(rect.width), Math.ceil(rect.height));
+			tauriAPI.resizeOverlay(
+				Math.ceil(rect.width * scale),
+				Math.ceil(rect.height * scale),
+			);
 		}
-	}, [rect.width, rect.height]);
+	}, [rect.width, rect.height, scale]);
 
 	// Click handler
 	const handleClick = useCallback(() => {
@@ -64,6 +86,8 @@ export default function OverlayApp() {
 				border: "1px solid rgba(128, 128, 128, 0.9)",
 				padding: 2, cursor: "grab",
 				userSelect: "none", touchAction: "none",
+				transform: scale !== 1 ? `scale(${scale})` : undefined,
+				transformOrigin: "top left",
 			}}>
 			{match(status)
 				.with("recording", () => (
