@@ -33,6 +33,14 @@ pub struct SettingsExportData {
     pub selected_mic_id: Option<String>,
     pub sound_enabled: bool,
     pub volume_reduction_percent: u8,
+    #[serde(default)]
+    pub stt_providers: Vec<crate::settings::SttProvider>,
+    #[serde(default)]
+    pub active_stt_provider_index: usize,
+    #[serde(default)]
+    pub stt_prompt: Option<String>,
+    #[serde(default)]
+    pub paste_prefix: Option<String>,
     pub openai_api_key: Option<String>,
     pub llm_formatting_enabled: bool,
     pub send_active_app_context_enabled: bool,
@@ -59,6 +67,10 @@ impl From<AppSettings> for SettingsExportData {
             selected_mic_id: s.selected_mic_id,
             sound_enabled: s.sound_enabled,
             volume_reduction_percent: s.volume_reduction_percent,
+            stt_providers: s.stt_providers,
+            active_stt_provider_index: s.active_stt_provider_index,
+            stt_prompt: s.stt_prompt,
+            paste_prefix: s.paste_prefix,
             openai_api_key: s.openai_api_key,
             llm_formatting_enabled: s.llm_formatting_enabled,
             send_active_app_context_enabled: s.send_active_app_context_enabled,
@@ -77,6 +89,10 @@ impl From<SettingsExportData> for AppSettings {
             sound_enabled: e.sound_enabled,
             cleanup_prompt_sections: None,
             volume_reduction_percent: e.volume_reduction_percent,
+            stt_providers: e.stt_providers,
+            active_stt_provider_index: e.active_stt_provider_index,
+            stt_prompt: e.stt_prompt,
+            paste_prefix: e.paste_prefix,
             openai_api_key: e.openai_api_key,
             llm_formatting_enabled: e.llm_formatting_enabled,
             send_active_app_context_enabled: e.send_active_app_context_enabled,
@@ -353,13 +369,17 @@ pub fn detect_export_file_type(content: String) -> DetectedFileType {
 // SETTING CLASSES FOR IMPORT/EXPORT
 // ============================================================================
 
-const IMPORT_EXPORT_SETTING_CLASSES: [SettingClass; 10] = [
+const IMPORT_EXPORT_SETTING_CLASSES: [SettingClass; 14] = [
     SettingClass::LocalOnly(LocalOnlySetting::ToggleHotkey),
     SettingClass::LocalOnly(LocalOnlySetting::HoldHotkey),
     SettingClass::LocalOnly(LocalOnlySetting::PasteLastHotkey),
     SettingClass::LocalOnly(LocalOnlySetting::SelectedMicId),
     SettingClass::LocalOnly(LocalOnlySetting::SoundEnabled),
     SettingClass::LocalOnly(LocalOnlySetting::VolumeReductionPercent),
+    SettingClass::LocalOnly(LocalOnlySetting::SttProviders),
+    SettingClass::LocalOnly(LocalOnlySetting::ActiveSttProviderIndex),
+    SettingClass::LocalOnly(LocalOnlySetting::SttPrompt),
+    SettingClass::LocalOnly(LocalOnlySetting::PastePrefix),
     SettingClass::LocalOnly(LocalOnlySetting::OpenaiApiKey),
     SettingClass::LocalOnly(LocalOnlySetting::LlmFormattingEnabled),
     SettingClass::LocalOnly(LocalOnlySetting::SendActiveAppContextEnabled),
@@ -378,6 +398,10 @@ fn serialized_value_for_setting(
         LocalOnlySetting::SelectedMicId => serde_json::to_value(&settings.selected_mic_id),
         LocalOnlySetting::SoundEnabled => serde_json::to_value(settings.sound_enabled),
         LocalOnlySetting::VolumeReductionPercent => serde_json::to_value(settings.volume_reduction_percent),
+        LocalOnlySetting::SttProviders => serde_json::to_value(&settings.stt_providers),
+        LocalOnlySetting::ActiveSttProviderIndex => serde_json::to_value(settings.active_stt_provider_index),
+        LocalOnlySetting::SttPrompt => serde_json::to_value(&settings.stt_prompt),
+        LocalOnlySetting::PastePrefix => serde_json::to_value(&settings.paste_prefix),
         LocalOnlySetting::OpenaiApiKey => serde_json::to_value(&settings.openai_api_key),
         LocalOnlySetting::LlmFormattingEnabled => {
             serde_json::to_value(settings.llm_formatting_enabled)

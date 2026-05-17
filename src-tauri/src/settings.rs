@@ -32,6 +32,10 @@ pub enum LocalOnlySetting {
     SelectedMicId,
     SoundEnabled,
     VolumeReductionPercent,
+    SttProviders,
+    ActiveSttProviderIndex,
+    SttPrompt,
+    PastePrefix,
     OpenaiApiKey,
     LlmFormattingEnabled,
     CleanupPromptSections,
@@ -48,6 +52,10 @@ impl LocalOnlySetting {
             Self::SelectedMicId => "selected_mic_id",
             Self::SoundEnabled => "sound_enabled",
             Self::VolumeReductionPercent => "volume_reduction_percent",
+            Self::SttProviders => "stt_providers",
+            Self::ActiveSttProviderIndex => "active_stt_provider_index",
+            Self::SttPrompt => "stt_prompt",
+            Self::PastePrefix => "paste_prefix",
             Self::OpenaiApiKey => "openai_api_key",
             Self::LlmFormattingEnabled => "llm_formatting_enabled",
             Self::CleanupPromptSections => "cleanup_prompt_sections",
@@ -270,6 +278,40 @@ impl CleanupPromptSections {
 }
 
 // ============================================================================
+// STT PROVIDER
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SttProvider {
+    pub name: String,
+    pub base_url: String,
+    pub model: String,
+    pub api_key: String,
+    /// `"multipart"` (OpenAI) or `"json"` (OpenRouter)
+    #[serde(default = "default_multipart")]
+    pub request_format: String,
+    #[serde(default)]
+    pub extra_body: Option<String>,
+}
+
+fn default_multipart() -> String {
+    "multipart".to_string()
+}
+
+impl Default for SttProvider {
+    fn default() -> Self {
+        Self {
+            name: "OpenAI".to_string(),
+            base_url: "https://api.openai.com/v1/audio/transcriptions".to_string(),
+            model: "whisper-1".to_string(),
+            api_key: String::new(),
+            request_format: "multipart".to_string(),
+            extra_body: None,
+        }
+    }
+}
+
+// ============================================================================
 // APP SETTINGS
 // ============================================================================
 
@@ -284,6 +326,14 @@ pub struct AppSettings {
     #[serde(default)]
     pub cleanup_prompt_sections: Option<CleanupPromptSections>,
     pub volume_reduction_percent: u8,
+    #[serde(default)]
+    pub stt_providers: Vec<SttProvider>,
+    #[serde(default)]
+    pub active_stt_provider_index: usize,
+    #[serde(default)]
+    pub stt_prompt: Option<String>,
+    #[serde(default)]
+    pub paste_prefix: Option<String>,
     pub openai_api_key: Option<String>,
     #[serde(default = "default_enabled")]
     pub llm_formatting_enabled: bool,
@@ -303,6 +353,10 @@ impl Default for AppSettings {
             sound_enabled: true,
             cleanup_prompt_sections: None,
             volume_reduction_percent: 0,
+            stt_providers: vec![SttProvider::default()],
+            active_stt_provider_index: 0,
+            stt_prompt: None,
+            paste_prefix: None,
             openai_api_key: None,
             llm_formatting_enabled: true,
             send_active_app_context_enabled: false,

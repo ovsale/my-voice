@@ -139,6 +139,16 @@ export interface CleanupPromptSections {
 	dictionary: PromptSection;
 }
 
+export interface SttProvider {
+	name: string;
+	base_url: string;
+	model: string;
+	api_key: string;
+	/** "multipart" (OpenAI) or "json" (OpenRouter) */
+	request_format: string;
+	extra_body: string | null;
+}
+
 export interface AppSettings {
 	toggle_hotkey: HotkeyConfig;
 	hold_hotkey: HotkeyConfig;
@@ -147,6 +157,10 @@ export interface AppSettings {
 	sound_enabled: boolean;
 	cleanup_prompt_sections: CleanupPromptSections | null;
 	volume_reduction_percent: number;
+	stt_providers: SttProvider[];
+	active_stt_provider_index: number;
+	stt_prompt: string | null;
+	paste_prefix: string | null;
 	openai_api_key: string | null;
 	/** LLM formatting enabled (true = format with LLM, false = raw transcription) */
 	llm_formatting_enabled: boolean;
@@ -284,6 +298,22 @@ export const tauriAPI = {
 
 	async updateVolumeReductionPercent(percent: number): Promise<void> {
 		return invoke("update_volume_reduction_percent", { percent });
+	},
+
+	async updateSttProviders(providers: SttProvider[]): Promise<void> {
+		return invoke("update_stt_providers", { providers });
+	},
+
+	async updateActiveSttProviderIndex(index: number): Promise<void> {
+		return invoke("update_active_stt_provider_index", { index });
+	},
+
+	async updateSttPrompt(prompt: string | null): Promise<void> {
+		return invoke("update_stt_prompt", { prompt });
+	},
+
+	async updatePastePrefix(prefix: string | null): Promise<void> {
+		return invoke("update_paste_prefix", { prefix });
 	},
 
 	async updateOpenaiApiKey(apiKey: string | null): Promise<void> {

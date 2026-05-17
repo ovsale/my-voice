@@ -10,6 +10,7 @@ pub enum ShortcutState {
     PreparingToRecordViaToggle,
     RecordingViaToggle,
     RecordingViaHold,
+    Processing,
     WaitingForPasteKeyRelease,
 }
 

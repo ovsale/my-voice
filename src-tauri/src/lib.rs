@@ -303,6 +303,16 @@ pub fn handle_shortcut_event(app: &AppHandle, shortcut: &Shortcut, event: TauriS
                 volume_reduction_percent,
                 "Toggle",
             );
+            ShortcutState::Processing
+        }
+        // Cancel pipeline during processing
+        (ShortcutState::Processing, ShortcutEvent::TogglePressed) => {
+            ShortcutState::Processing
+        }
+        (ShortcutState::Processing, ShortcutEvent::ToggleReleased) => {
+            let orch = app.state::<recording::RecordingOrchestrator>();
+            recording::cancel_pipeline(app, &orch);
+            log::info!("Toggle: cancelled processing pipeline");
             ShortcutState::Idle
         }
         (ShortcutState::Idle, ShortcutEvent::HoldPressed) => {
@@ -323,7 +333,7 @@ pub fn handle_shortcut_event(app: &AppHandle, shortcut: &Shortcut, event: TauriS
                 volume_reduction_percent,
                 "Hold",
             );
-            ShortcutState::Idle
+            ShortcutState::Processing
         }
         (ShortcutState::RecordingViaHold, ShortcutEvent::HoldPressed) => {
             ShortcutState::RecordingViaHold
@@ -446,6 +456,10 @@ pub fn run() {
             commands::settings::update_sound_enabled,
             commands::settings::update_cleanup_prompt_sections,
             commands::settings::update_volume_reduction_percent,
+            commands::settings::update_stt_providers,
+            commands::settings::update_active_stt_provider_index,
+            commands::settings::update_stt_prompt,
+            commands::settings::update_paste_prefix,
             commands::settings::update_openai_api_key,
             commands::settings::update_llm_formatting_enabled,
             commands::settings::update_send_active_app_context_enabled,

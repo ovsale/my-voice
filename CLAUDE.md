@@ -1,6 +1,6 @@
 # My Voice
 
-Voice dictation desktop app. Hotkey → mic capture → OpenAI Whisper STT → optional LLM formatting → paste text into active window.
+Voice dictation desktop app. Hotkey → mic capture → configurable STT provider → optional LLM formatting → paste text into active window.
 
 ## Tech Stack
 
@@ -8,7 +8,7 @@ Voice dictation desktop app. Hotkey → mic capture → OpenAI Whisper STT → o
 - **Frontend:** React 19, TypeScript, Mantine UI (dark theme), Zustand, Vite 7
 - **Audio capture:** cpal 0.17 (CoreAudio on macOS, WASAPI on Windows)
 - **Audio encoding:** Manual WAV (16-bit PCM), no hound at runtime
-- **STT:** OpenAI Whisper API (`/v1/audio/transcriptions`)
+- **STT:** Configurable provider (OpenAI Whisper multipart, OpenRouter JSON+base64, or any compatible endpoint)
 - **LLM:** OpenAI Chat Completions (`gpt-4o-mini`) for text cleanup
 - **Text insertion:** arboard (clipboard) + enigo (Cmd+V simulation)
 - **Global hotkeys:** tauri-plugin-global-shortcut
@@ -31,7 +31,7 @@ src-tauri/src/                # Rust backend
   lib.rs                      # App init, tray, hotkey registration & state machine
   recording.rs                # Pipeline orchestrator: mic → WAV → STT → LLM → paste
   audio_encoder.rs            # f32 PCM → WAV bytes (manual encoding)
-  stt.rs                      # OpenAI Whisper HTTP client
+  stt.rs                      # STT HTTP client (multipart + JSON formats)
   llm.rs                      # OpenAI Chat Completions HTTP client
   mic_capture/                # cpal-based mic capture with dedicated audio thread
     cpal_impl.rs              # Audio stream management via channels
@@ -44,7 +44,7 @@ src-tauri/src/                # Rust backend
   active_app_context/         # Detect focused window (macOS Accessibility API)
   audio_mute/                 # Reduce/mute system audio volume during recording
   history.rs                  # SQLite storage
-  settings.rs                 # Settings schema (hotkeys, API key, prompts)
+  settings.rs                 # Settings schema (hotkeys, STT providers, prompts)
   state.rs                    # App state (ShortcutState machine)
   events.rs                   # Event names & payload types
 ```
@@ -54,11 +54,14 @@ src-tauri/src/                # Rust backend
 1. **Hotkey** (lib.rs) → state machine transitions (Idle → Recording → Processing → Idle)
 2. **Mic capture** (cpal_impl.rs) → f32 PCM samples pushed into shared Arc<Mutex<Vec<f32>>>
 3. **WAV encode** (audio_encoder.rs) → 16-bit PCM WAV bytes
-4. **Whisper API** (stt.rs) → multipart POST, returns transcription text
-5. **LLM format** (llm.rs) → optional cleanup via Chat Completions
-6. **Paste** (text.rs) → clipboard set → Cmd+V simulation (keycode 0x09, layout-independent)
-7. **History** (history.rs) → save to SQLite, emit event
-8. **Frontend** listens to `recording-status-changed` events, overlay shows status
+4. **STT API** (stt.rs) → multipart or JSON request to active provider, returns transcription text
+5. **Trim** → leading/trailing whitespace stripped from transcription
+6. **LLM format** (llm.rs) → optional cleanup via Chat Completions
+7. **Prefix** → optional `paste_prefix` prepended (e.g. "🎙 ")
+8. **Paste** (text.rs) → clipboard set → Cmd+V simulation (keycode 0x09, layout-independent)
+9. **History** (history.rs) → save to SQLite, emit event
+10. **Frontend** listens to `recording-status-changed` events, overlay shows status
+11. **Cancel** → repeat hotkey during Processing aborts the pipeline (JoinHandle::abort)
 
 ## Key Conventions
 
@@ -72,6 +75,10 @@ src-tauri/src/                # Rust backend
 - Async tasks from non-async contexts use `tauri::async_runtime::spawn` (not `tokio::spawn`)
 - Audio thread communicates via `std::sync::mpsc` channels (cpal::Stream is not Send on macOS)
 - **Volume reduction:** `volume_reduction_percent` setting (0–100, default 0). Uses perceptual cubic curve (`scale = linear³`) so the slider feels linear to human hearing. At 100% uses system mute; otherwise adjusts volume via `kAudioDevicePropertyVolumeScalar` (macOS) / `SetMasterVolumeLevelScalar` (Windows). Original volume is saved and restored after recording.
+- **STT providers:** `stt_providers` is an array of `SttProvider` objects (name, base_url, model, api_key, request_format, extra_body). `active_stt_provider_index` selects which one to use. Two request formats: `"multipart"` (OpenAI-native form upload) and `"json"` (OpenRouter-style JSON with base64 audio in `input_audio.data`). Extra body params are merged into the request (form fields for multipart, flattened JSON keys for json format).
+- **STT prompt:** Global `stt_prompt` setting sent with every STT request as context hint. Supported by OpenAI Whisper; may be ignored by other providers (e.g. Groq via OpenRouter).
+- **Paste prefix:** Optional `paste_prefix` prepended to every transcription before pasting.
+- **Pipeline cancellation:** Repeating the toggle hotkey during Processing state aborts the running async task via `JoinHandle::abort()`. State machine tracks Processing separately and resets to Idle on cancel or pipeline completion.
 
 ## Working with Claude
 

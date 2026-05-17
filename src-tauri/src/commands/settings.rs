@@ -168,6 +168,18 @@ pub fn get_settings(app: AppHandle) -> Result<AppSettings, String> {
             None,
         ),
         volume_reduction_percent: get_setting_from_store(&app, LocalOnlySetting::VolumeReductionPercent, 0u8),
+        stt_providers: get_setting_from_store(
+            &app,
+            LocalOnlySetting::SttProviders,
+            vec![crate::settings::SttProvider::default()],
+        ),
+        active_stt_provider_index: get_setting_from_store(
+            &app,
+            LocalOnlySetting::ActiveSttProviderIndex,
+            0usize,
+        ),
+        stt_prompt: get_setting_from_store(&app, LocalOnlySetting::SttPrompt, None),
+        paste_prefix: get_setting_from_store(&app, LocalOnlySetting::PastePrefix, None),
         openai_api_key: get_setting_from_store(&app, LocalOnlySetting::OpenaiApiKey, None),
         llm_formatting_enabled: get_setting_from_store(
             &app,
@@ -287,6 +299,90 @@ pub async fn update_volume_reduction_percent(app: AppHandle, percent: u8) -> Res
 #[cfg(not(desktop))]
 #[tauri::command]
 pub async fn update_volume_reduction_percent(_app: AppHandle, _percent: u8) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+pub async fn update_stt_providers(
+    app: AppHandle,
+    providers: Vec<crate::settings::SttProvider>,
+) -> Result<(), String> {
+    persist_setting(&app, LocalOnlySetting::SttProviders, &providers)
+        .map_err(|error| format!("{error:#}"))?;
+    log::info!("Updated STT providers ({} total)", providers.len());
+    Ok(())
+}
+
+#[cfg(not(desktop))]
+#[tauri::command]
+pub async fn update_stt_providers(
+    _app: AppHandle,
+    _providers: Vec<crate::settings::SttProvider>,
+) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+pub async fn update_active_stt_provider_index(
+    app: AppHandle,
+    index: usize,
+) -> Result<(), String> {
+    persist_setting(&app, LocalOnlySetting::ActiveSttProviderIndex, &index)
+        .map_err(|error| format!("{error:#}"))?;
+    log::info!("Updated active STT provider index: {index}");
+    Ok(())
+}
+
+#[cfg(not(desktop))]
+#[tauri::command]
+pub async fn update_active_stt_provider_index(
+    _app: AppHandle,
+    _index: usize,
+) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+pub async fn update_stt_prompt(
+    app: AppHandle,
+    prompt: Option<String>,
+) -> Result<(), String> {
+    persist_setting(&app, LocalOnlySetting::SttPrompt, &prompt)
+        .map_err(|error| format!("{error:#}"))?;
+    log::info!("Updated STT prompt");
+    Ok(())
+}
+
+#[cfg(not(desktop))]
+#[tauri::command]
+pub async fn update_stt_prompt(
+    _app: AppHandle,
+    _prompt: Option<String>,
+) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+pub async fn update_paste_prefix(
+    app: AppHandle,
+    prefix: Option<String>,
+) -> Result<(), String> {
+    persist_setting(&app, LocalOnlySetting::PastePrefix, &prefix)
+        .map_err(|error| format!("{error:#}"))?;
+    log::info!("Updated paste prefix: {prefix:?}");
+    Ok(())
+}
+
+#[cfg(not(desktop))]
+#[tauri::command]
+pub async fn update_paste_prefix(
+    _app: AppHandle,
+    _prefix: Option<String>,
+) -> Result<(), String> {
     Ok(())
 }
 

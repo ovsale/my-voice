@@ -7,13 +7,15 @@
 use std::sync::{Arc, Mutex};
 
 use tauri::{AppHandle, Emitter, Manager};
+use tauri::async_runtime::JoinHandle;
 
 use crate::audio_encoder;
 use crate::events::{EventName, RecordingStatus};
 use crate::history::HistoryStorage;
 use crate::llm;
 use crate::mic_capture::{MicCapture, MicCaptureManager};
-use crate::settings::{CleanupPromptSections, LocalOnlySetting, PromptMode};
+use crate::settings::{CleanupPromptSections, LocalOnlySetting, PromptMode, SttProvider};
+use crate::state::{AppState, ShortcutState};
 use crate::stt;
 
 #[cfg(desktop)]
@@ -29,6 +31,8 @@ pub struct RecordingOrchestrator {
     sample_rate: Arc<Mutex<u32>>,
     channels: Arc<Mutex<u16>>,
     http_client: reqwest::Client,
+    /// Handle to the running pipeline task, used for cancellation.
+    pipeline_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
 
 impl RecordingOrchestrator {
@@ -39,6 +43,7 @@ impl RecordingOrchestrator {
             sample_rate: Arc::new(Mutex::new(44100)),
             channels: Arc::new(Mutex::new(1)),
             http_client: reqwest::Client::new(),
+            pipeline_handle: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -73,6 +78,24 @@ pub fn set_status_pub(orch: &RecordingOrchestrator, new_status: RecordingStatusP
     set_status(&orch.status, new_status);
 }
 
+/// Cancel the currently running pipeline (if any).
+/// Returns true if a pipeline was actually cancelled.
+pub fn cancel_pipeline(app: &AppHandle, orch: &RecordingOrchestrator) -> bool {
+    let handle = {
+        let mut guard = orch.pipeline_handle.lock().unwrap_or_else(|e| e.into_inner());
+        guard.take()
+    };
+    if let Some(h) = handle {
+        h.abort();
+        set_status(&orch.status, RecordingStatus::Idle);
+        emit_status(app, RecordingStatus::Idle);
+        log::info!("Pipeline cancelled by user");
+        true
+    } else {
+        false
+    }
+}
+
 /// Trigger the processing pipeline after mic capture has been stopped.
 /// Called from the hotkey handler in lib.rs.
 pub fn trigger_pipeline(app: AppHandle, orch: &RecordingOrchestrator) {
@@ -95,8 +118,9 @@ pub fn trigger_pipeline(app: AppHandle, orch: &RecordingOrchestrator) {
 
     let status = orch.status.clone();
     let http_client = orch.http_client.clone();
+    let pipeline_handle_ref = orch.pipeline_handle.clone();
 
-    tauri::async_runtime::spawn(async move {
+    let handle = tauri::async_runtime::spawn(async move {
         let result = run_pipeline(&app, &http_client, samples, sample_rate, channels).await;
         match result {
             Ok(()) => {
@@ -110,7 +134,22 @@ pub fn trigger_pipeline(app: AppHandle, orch: &RecordingOrchestrator) {
                 emit_status(&app, RecordingStatus::Error);
             }
         }
+        // Reset shortcut state machine back to Idle
+        if let Some(app_state) = app.try_state::<AppState>() {
+            if let Ok(mut s) = app_state.shortcut_state.lock() {
+                *s = ShortcutState::Idle;
+            }
+        }
+        // Clear the handle once done
+        if let Ok(mut guard) = pipeline_handle_ref.lock() {
+            *guard = None;
+        }
     });
+
+    // Store handle for possible cancellation
+    if let Ok(mut guard) = orch.pipeline_handle.lock() {
+        *guard = Some(handle);
+    }
 }
 
 // =============================================================================
@@ -171,9 +210,10 @@ pub async fn stop_recording_cmd(
 
     let status = recording.status.clone();
     let http_client = recording.http_client.clone();
+    let pipeline_handle_ref = recording.pipeline_handle.clone();
 
     // Spawn processing pipeline
-    tauri::async_runtime::spawn(async move {
+    let handle = tauri::async_runtime::spawn(async move {
         let result =
             run_pipeline(&app, &http_client, samples, sample_rate, channels).await;
 
@@ -189,7 +229,14 @@ pub async fn stop_recording_cmd(
                 emit_status(&app, RecordingStatus::Error);
             }
         }
+        if let Ok(mut guard) = pipeline_handle_ref.lock() {
+            *guard = None;
+        }
     });
+
+    if let Ok(mut guard) = recording.pipeline_handle.lock() {
+        *guard = Some(handle);
+    }
 
     Ok(())
 }
@@ -231,20 +278,51 @@ async fn run_pipeline(
         .context("Failed to encode audio to WAV")?;
     log::info!("WAV encoded: {} bytes", wav_data.len());
 
-    // 2. Read API key
-    let api_key = read_setting::<Option<String>>(app, LocalOnlySetting::OpenaiApiKey, None)
-        .unwrap_or_default();
-    if api_key.is_empty() {
-        anyhow::bail!("OpenAI API key is not configured. Set it in Settings.");
+    // 2. Read active STT provider
+    let providers: Vec<SttProvider> = read_setting(
+        app,
+        LocalOnlySetting::SttProviders,
+        vec![SttProvider::default()],
+    );
+    let active_index: usize = read_setting(app, LocalOnlySetting::ActiveSttProviderIndex, 0);
+    let provider = providers
+        .get(active_index)
+        .or_else(|| providers.first())
+        .context("No STT providers configured")?;
+
+    if provider.api_key.is_empty() {
+        anyhow::bail!(
+            "STT API key is not configured for provider '{}'. Set it in Settings.",
+            provider.name
+        );
     }
 
-    // 3. Transcribe via Whisper
-    let raw_text = stt::transcribe(http_client, &api_key, wav_data, None)
+    let format = stt::SttRequestFormat::from_str_lossy(&provider.request_format);
+    log::info!(
+        "Using STT provider '{}' (format: {}, model: {})",
+        provider.name,
+        format.as_str(),
+        provider.model
+    );
+
+    // 3. Transcribe via STT API
+    let stt_prompt: Option<String> = read_setting(app, LocalOnlySetting::SttPrompt, None);
+    let stt_config = stt::SttConfig {
+        base_url: &provider.base_url,
+        model: &provider.model,
+        api_key: &provider.api_key,
+        format,
+        prompt: stt_prompt.as_deref(),
+        extra_body: provider.extra_body.as_deref(),
+    };
+    let raw_text = stt::transcribe(http_client, &stt_config, wav_data, None)
         .await
-        .context("Speech-to-text failed")?;
+        .context("Speech-to-text failed")?
+        .trim()
+        .to_string();
     log::info!("Transcription: {:.120}", raw_text);
 
-    if raw_text.trim().is_empty() {
+    if raw_text.is_empty() {
         log::info!("Empty transcription, skipping");
         return Ok(());
     }
@@ -252,8 +330,11 @@ async fn run_pipeline(
     // 4. Optionally format via LLM
     let llm_enabled = read_setting(app, LocalOnlySetting::LlmFormattingEnabled, true);
     let final_text = if llm_enabled {
+        let llm_api_key =
+            read_setting::<Option<String>>(app, LocalOnlySetting::OpenaiApiKey, None)
+                .unwrap_or_default();
         let system_prompt = build_system_prompt(app);
-        match llm::format_text(http_client, &api_key, &system_prompt, &raw_text).await {
+        match llm::format_text(http_client, &llm_api_key, &system_prompt, &raw_text).await {
             Ok(formatted) => {
                 log::info!("LLM formatted: {:.120}", formatted);
                 formatted
@@ -267,7 +348,20 @@ async fn run_pipeline(
         raw_text.clone()
     };
 
-    // 5. Paste text (must be on main thread for macOS accessibility)
+    // 5. Apply optional prefix
+    let paste_prefix: Option<String> =
+        read_setting(app, LocalOnlySetting::PastePrefix, None);
+    let final_text = if let Some(prefix) = &paste_prefix {
+        if prefix.is_empty() {
+            final_text
+        } else {
+            format!("{prefix}{final_text}")
+        }
+    } else {
+        final_text
+    };
+
+    // 6. Paste text
     let text_to_paste = final_text.clone();
     let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
     app.run_on_main_thread(move || {
