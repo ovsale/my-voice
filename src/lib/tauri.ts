@@ -148,7 +148,7 @@ export interface SttProvider {
 	base_url: string;
 	model: string;
 	api_key: string;
-	/** "multipart" (OpenAI) or "json" (OpenRouter) */
+	/** "multipart" (OpenAI), "json" (OpenRouter) or "gemini" (Google) */
 	request_format: string;
 	extra_body: string | null;
 }

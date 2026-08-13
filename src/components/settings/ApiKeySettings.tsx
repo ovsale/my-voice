@@ -170,6 +170,7 @@ export function ApiKeySettings() {
 								data={[
 									{ value: "multipart", label: "Multipart (OpenAI)" },
 									{ value: "json", label: "JSON (OpenRouter)" },
+									{ value: "gemini", label: "Gemini (Google)" },
 								]}
 								value={provider.request_format}
 								onChange={(val) => updateProvider(index, { request_format: val || "multipart" })}
