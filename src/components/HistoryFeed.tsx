@@ -1,6 +1,5 @@
 import { ActionIcon, Button, Group, Menu, Modal, Text } from "@mantine/core";
 import { useClipboard, useDisclosure } from "@mantine/hooks";
-import { notifications } from "@mantine/notifications";
 import { format, isToday, isYesterday } from "date-fns";
 import {
 	Copy,
@@ -268,19 +267,8 @@ export function HistoryFeed() {
 		setIsRetranscribing(true);
 		try {
 			await tauriAPI.retranscribeLast();
-			notifications.show({
-				title: "Re-transcribed",
-				message: "The recording was transcribed again with current settings.",
-				color: "green",
-				autoClose: 4000,
-			});
 		} catch (retranscribeError) {
-			notifications.show({
-				title: "Re-transcription failed",
-				message: String(retranscribeError),
-				color: "red",
-				autoClose: 8000,
-			});
+			console.error("Re-transcription failed:", retranscribeError);
 		} finally {
 			setIsRetranscribing(false);
 		}
