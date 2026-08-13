@@ -79,6 +79,7 @@ src-tauri/src/                # Rust backend
 - **STT prompt:** Global `stt_prompt` setting sent with every STT request as context hint. Supported by OpenAI Whisper; may be ignored by other providers (e.g. Groq via OpenRouter).
 - **Paste prefix:** Optional `paste_prefix` prepended to every transcription before pasting.
 - **Pipeline cancellation:** Repeating the toggle hotkey during Processing state aborts the running async task via `JoinHandle::abort()`. State machine tracks Processing separately and resets to Idle on cancel or pipeline completion.
+- **Re-transcription:** Every recording's WAV is saved to `last_recording.wav` (app data dir, single slot, overwritten by the next recording) before the STT call; `last_recording.json` links it to the history entry that owns it. On STT failure (or empty result) a `status: failed` history entry is created with the error text. The `retranscribe_last` command re-runs STT → LLM → prefix on the saved clip with *current* settings (so switching providers applies) and updates the owning entry in place — no Cmd+V paste (the app window is focused). Exposed in the history item context menu ("Re-transcribe"), shown only on the entry linked to the saved clip. A failed re-transcribe never wipes previously successful text (`mark_entry_failed` skips entries with text).
 
 ## Working with Claude
 

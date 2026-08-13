@@ -483,6 +483,8 @@ pub fn run() {
             recording::start_recording_cmd,
             recording::stop_recording_cmd,
             recording::get_recording_status,
+            recording::retranscribe_last,
+            recording::get_last_recording_entry_id,
             list_native_mic_devices,
             active_app_get_current_context,
         ])

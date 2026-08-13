@@ -1,5 +1,6 @@
 import { ActionIcon, Button, Group, Menu, Modal, Text } from "@mantine/core";
 import { useClipboard, useDisclosure } from "@mantine/hooks";
+import { notifications } from "@mantine/notifications";
 import { format, isToday, isYesterday } from "date-fns";
 import {
 	Copy,
@@ -7,6 +8,7 @@ import {
 	EyeOff,
 	MessageSquare,
 	MoreVertical,
+	RefreshCw,
 	Trash2,
 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
@@ -55,6 +57,9 @@ interface HistoryItemProps {
 	onCopy: (text: string) => void;
 	onDelete: (id: string) => void;
 	isDeleting: boolean;
+	canRetranscribe: boolean;
+	isRetranscribing: boolean;
+	onRetranscribe: () => void;
 }
 
 const HistoryItem = memo(function HistoryItem({
@@ -62,6 +67,9 @@ const HistoryItem = memo(function HistoryItem({
 	onCopy,
 	onDelete,
 	isDeleting,
+	canRetranscribe,
+	isRetranscribing,
+	onRetranscribe,
 }: HistoryItemProps) {
 	const [isExpanded, setIsExpanded] = useState(false);
 	const activeAppContextSnapshot = entry.active_app_context;
@@ -96,7 +104,17 @@ const HistoryItem = memo(function HistoryItem({
 		<div className="history-item">
 			<span className="history-time">{formatTime(entry.timestamp)}</span>
 			<div className="history-content">
-				<p className="history-text">{entry.text}</p>
+				{entry.status === "failed" ? (
+					<p
+						className="history-text"
+						style={{ color: "var(--mantine-color-red-5)" }}
+					>
+						Transcription failed
+						{entry.error ? `: ${entry.error}` : ""}
+					</p>
+				) : (
+					<p className="history-text">{entry.text}</p>
+				)}
 				{isExpanded && (
 					<div className="history-raw-text">
 						<Text className="history-details-heading" mb={4}>
@@ -148,6 +166,15 @@ const HistoryItem = memo(function HistoryItem({
 						>
 							Copy raw
 						</Menu.Item>
+						{canRetranscribe && (
+							<Menu.Item
+								leftSection={<RefreshCw size={14} />}
+								onClick={onRetranscribe}
+								disabled={isRetranscribing}
+							>
+								{isRetranscribing ? "Re-transcribing..." : "Re-transcribe"}
+							</Menu.Item>
+						)}
 						<Menu.Item
 							leftSection={
 								isExpanded ? <EyeOff size={14} /> : <Eye size={14} />
@@ -178,14 +205,22 @@ export function HistoryFeed() {
 	const [error, setError] = useState<string | null>(null);
 	const [isDeleting, setIsDeleting] = useState(false);
 	const [isClearing, setIsClearing] = useState(false);
+	const [lastRecordingEntryId, setLastRecordingEntryId] = useState<
+		string | null
+	>(null);
+	const [isRetranscribing, setIsRetranscribing] = useState(false);
 	const clipboard = useClipboard();
 	const [confirmOpened, { open: openConfirm, close: closeConfirm }] =
 		useDisclosure(false);
 
 	const loadHistory = useCallback(async () => {
 		try {
-			const entries = await tauriAPI.getHistory(100);
+			const [entries, lastEntryId] = await Promise.all([
+				tauriAPI.getHistory(100),
+				tauriAPI.getLastRecordingEntryId().catch(() => null),
+			]);
 			setHistory(entries);
+			setLastRecordingEntryId(lastEntryId);
 			setError(null);
 		} catch {
 			setError("Failed to load history");
@@ -228,6 +263,28 @@ export function HistoryFeed() {
 		},
 		[clipboard],
 	);
+
+	const handleRetranscribe = useCallback(async () => {
+		setIsRetranscribing(true);
+		try {
+			await tauriAPI.retranscribeLast();
+			notifications.show({
+				title: "Re-transcribed",
+				message: "The recording was transcribed again with current settings.",
+				color: "green",
+				autoClose: 4000,
+			});
+		} catch (retranscribeError) {
+			notifications.show({
+				title: "Re-transcription failed",
+				message: String(retranscribeError),
+				color: "red",
+				autoClose: 8000,
+			});
+		} finally {
+			setIsRetranscribing(false);
+		}
+	}, []);
 
 	const handleClearAll = async () => {
 		setIsClearing(true);
@@ -347,6 +404,9 @@ export function HistoryFeed() {
 								onCopy={handleCopy}
 								onDelete={handleDelete}
 								isDeleting={isDeleting}
+								canRetranscribe={entry.id === lastRecordingEntryId}
+								isRetranscribing={isRetranscribing}
+								onRetranscribe={handleRetranscribe}
 							/>
 						))}
 					</div>

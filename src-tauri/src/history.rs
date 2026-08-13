@@ -33,6 +33,15 @@ pub struct HistoryImportResult {
     pub entries_skipped: Option<usize>,
 }
 
+/// Outcome of the transcription that produced a history entry
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TranscriptionStatus {
+    #[default]
+    Ok,
+    Failed,
+}
+
 /// A single dictation history entry
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HistoryEntry {
@@ -43,6 +52,10 @@ pub struct HistoryEntry {
     pub raw_text: String,
     #[serde(default)]
     pub active_app_context: Option<ActiveAppContextSnapshot>,
+    #[serde(default)]
+    pub status: TranscriptionStatus,
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 impl HistoryEntry {
@@ -57,6 +70,8 @@ impl HistoryEntry {
             text,
             raw_text,
             active_app_context,
+            status: TranscriptionStatus::Ok,
+            error: None,
         }
     }
 }
@@ -179,19 +194,98 @@ impl HistoryStorage {
         active_app_context: Option<ActiveAppContextSnapshot>,
     ) -> Result<HistoryEntry> {
         let new_history_entry = HistoryEntry::new(text, raw_text, active_app_context);
+        self.insert(new_history_entry.clone())?;
+        Ok(new_history_entry)
+    }
+
+    /// Add a placeholder entry for a recording whose transcription failed
+    pub fn add_failed_entry(&self, error: String) -> Result<HistoryEntry> {
+        let mut failed_entry = HistoryEntry::new(String::new(), String::new(), None);
+        failed_entry.status = TranscriptionStatus::Failed;
+        failed_entry.error = Some(error);
+        self.insert(failed_entry.clone())?;
+        Ok(failed_entry)
+    }
+
+    /// Insert an entry at the top of the history and persist
+    fn insert(&self, entry: HistoryEntry) -> Result<()> {
         {
             let mut history_data = self.data.write().map_err(|error| {
                 anyhow::anyhow!("Failed to acquire history write lock when adding entry: {error}")
             })?;
 
-            history_data.entries.insert(0, new_history_entry.clone());
+            history_data.entries.insert(0, entry);
 
             if history_data.entries.len() > MAX_HISTORY_ENTRIES {
                 history_data.entries.truncate(MAX_HISTORY_ENTRIES);
             }
         }
-        self.save()?;
-        Ok(new_history_entry)
+        self.save()
+    }
+
+    /// Replace an entry's transcription after a successful re-transcribe.
+    /// Returns false if the entry no longer exists.
+    pub fn update_entry_transcription(
+        &self,
+        id: &str,
+        text: String,
+        raw_text: String,
+    ) -> Result<bool> {
+        let updated = {
+            let mut history_data = self.data.write().map_err(|error| {
+                anyhow::anyhow!(
+                    "Failed to acquire history write lock when updating entry {id}: {error}"
+                )
+            })?;
+
+            if let Some(entry) = history_data.entries.iter_mut().find(|entry| entry.id == id) {
+                entry.text = text;
+                entry.raw_text = raw_text;
+                entry.status = TranscriptionStatus::Ok;
+                entry.error = None;
+                true
+            } else {
+                false
+            }
+        };
+
+        if updated {
+            self.save()?;
+        }
+
+        Ok(updated)
+    }
+
+    /// Mark an entry as failed unless it already holds a successful transcription
+    /// (a failed re-transcribe must not wipe previously good text).
+    /// Returns false if nothing was changed.
+    pub fn mark_entry_failed(&self, id: &str, error: String) -> Result<bool> {
+        let changed = {
+            let mut history_data = self.data.write().map_err(|err| {
+                anyhow::anyhow!(
+                    "Failed to acquire history write lock when marking entry {id} failed: {err}"
+                )
+            })?;
+
+            match history_data
+                .entries
+                .iter_mut()
+                .find(|entry| entry.id == id)
+            {
+                Some(entry) if entry.text.is_empty() => {
+                    entry.status = TranscriptionStatus::Failed;
+                    entry.error = Some(error);
+                    true
+                }
+                _ => false,
+            }
+        };
+
+        if changed {
+            self.save()?;
+        }
+
+        Ok(changed)
     }
 
     /// Get all history entries (newest first), optionally limited
@@ -386,6 +480,60 @@ mod tests {
         assert_eq!(loaded_entries[0].id, "legacy-entry-id");
         assert_eq!(loaded_entries[0].raw_text, "");
         assert!(loaded_entries[0].active_app_context.is_none());
+    }
+
+    #[test]
+    fn failed_entry_lifecycle_supports_retranscription() {
+        let temporary_history_directory = TemporaryHistoryDirectory::new();
+        let history_storage = HistoryStorage::new(temporary_history_directory.path.clone());
+
+        let failed_entry = history_storage
+            .add_failed_entry("STT unreachable".to_string())
+            .expect("failed to add failed entry");
+        assert_eq!(failed_entry.status, TranscriptionStatus::Failed);
+        assert_eq!(failed_entry.error.as_deref(), Some("STT unreachable"));
+        assert!(failed_entry.text.is_empty());
+
+        // A failed re-transcribe updates the error on an entry without text
+        let marked = history_storage
+            .mark_entry_failed(&failed_entry.id, "Timeout".to_string())
+            .expect("failed to mark entry failed");
+        assert!(marked);
+
+        // A successful re-transcribe replaces the failure with text
+        let updated = history_storage
+            .update_entry_transcription(
+                &failed_entry.id,
+                "Formatted".to_string(),
+                "Raw".to_string(),
+            )
+            .expect("failed to update entry transcription");
+        assert!(updated);
+
+        let entries = history_storage.get_all(None).expect("failed to load");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].status, TranscriptionStatus::Ok);
+        assert_eq!(entries[0].text, "Formatted");
+        assert_eq!(entries[0].raw_text, "Raw");
+        assert!(entries[0].error.is_none());
+
+        // A later failed re-transcribe must not wipe the good text
+        let marked_again = history_storage
+            .mark_entry_failed(&failed_entry.id, "Timeout".to_string())
+            .expect("failed to mark entry failed");
+        assert!(!marked_again);
+        let entries = history_storage.get_all(None).expect("failed to load");
+        assert_eq!(entries[0].text, "Formatted");
+        assert_eq!(entries[0].status, TranscriptionStatus::Ok);
+
+        // Updating a deleted entry reports false
+        history_storage
+            .delete(&failed_entry.id)
+            .expect("failed to delete entry");
+        let updated_missing = history_storage
+            .update_entry_transcription(&failed_entry.id, String::new(), String::new())
+            .expect("failed to call update on missing entry");
+        assert!(!updated_missing);
     }
 
     #[test]

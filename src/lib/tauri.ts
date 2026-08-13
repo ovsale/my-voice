@@ -41,12 +41,16 @@ export interface ShortcutRegistrationResult {
 	errors: ShortcutErrors;
 }
 
+export type TranscriptionStatus = "ok" | "failed";
+
 export interface HistoryEntry {
 	id: string;
 	timestamp: string;
 	text: string;
 	raw_text: string;
 	active_app_context?: ActiveAppContextSnapshot | null;
+	status: TranscriptionStatus;
+	error?: string | null;
 }
 
 // =============================================================================
@@ -382,6 +386,15 @@ export const tauriAPI = {
 
 	async clearHistory(): Promise<void> {
 		return invoke("clear_history");
+	},
+
+	// Re-transcription of the last saved recording
+	async getLastRecordingEntryId(): Promise<string | null> {
+		return invoke("get_last_recording_entry_id");
+	},
+
+	async retranscribeLast(): Promise<void> {
+		return invoke("retranscribe_last");
 	},
 
 	// Overlay API
