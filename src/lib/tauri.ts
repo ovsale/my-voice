@@ -41,7 +41,7 @@ export interface ShortcutRegistrationResult {
 	errors: ShortcutErrors;
 }
 
-export type TranscriptionStatus = "ok" | "failed";
+export type TranscriptionStatus = "ok" | "failed" | "processing";
 
 export interface HistoryEntry {
 	id: string;

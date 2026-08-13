@@ -2,6 +2,50 @@
 
 Voice dictation desktop app. Hotkey → mic capture → configurable STT provider → optional LLM formatting → paste text into active window.
 
+## Main communication and security rules
+
+**Voice input (🎤) may be inaccurate.** Messages with 🎤 are speech-transcribed. For any critical action (commit, release build, deleting data, overwriting the installed app) — ALWAYS ask for confirmation.
+
+**NEVER commit or push without explicit permission.** "Build" does NOT mean "commit". Each action requires separate confirmation in the current message.
+
+**NEVER build, install, or launch the app without explicit permission.** No `pnpm tauri build`, `pnpm tauri dev`, opening the DMG, or launching the app unless the user explicitly asks in the current message — earlier mentions of an upcoming release do not count.
+
+**NEVER delete, remove, or overwrite user data** in the app data directory (`settings.json`, `history.json`, `last_recording.wav`) without EXPLICIT permission. Dictation history and settings are irreplaceable.
+
+**Do NOT read or print API keys** — they live in the settings store (`settings.json` in app data) and in `.env` files of neighboring projects.
+
+**Do NOT offer predefined multiple-choice questions.** Ask questions as plain text — the user answers in text.
+
+**When a mistake is discovered — discuss before redoing.** If it turns out something was done incorrectly (wrong assumptions, a bug the user found, new facts), do NOT rush to fix the code. First present the diagnosis and the proposed fix, discuss, and only after agreement — implement.
+
+## Coding rules
+
+**Workflow: understand first, then implement.** Do NOT jump to editing code. First discuss the task with the user, understand the problem, agree on the approach — then implement. Ask questions if anything is unclear.
+
+**Do NOT use plan mode.** The user prefers direct discussion and implementation.
+
+**Implement only what was agreed.** No unrequested extras (notifications, UI elements, features) beyond the discussed scope.
+
+### Code style
+
+**No JS/TS getter/setter syntax** (`get x()`, `set x()`). Use explicit methods: `getSleepUntil()`, `setSleepUntil(value)`.
+
+**Top-down code order (newspaper style).** Main class/function first, helper functions below. The caller comes before the callee. High-level logic at the top of the file, implementation details at the bottom. Applies to both TypeScript and Rust.
+
+**Always use curly braces.** No one-liners for `if`, `for`, `while`, etc. Always use `{ }` even for single-line bodies. Lines are free — readability is not.
+
+**`else if` only for flat chains.** Use `else if` only when checking values at the same level (like a switch). When branches have nested logic inside, use `else { if ... }` — otherwise the structure isn't clear at a glance.
+
+**Formatting is handled by Biome** (`pnpm lint`): tabs, double quotes. Don't hand-reformat existing code; match the file you're in.
+
+**`const` only for true constants.** Use `const` for declared constants (module-level values, config). For local variables, `let` is fine — don't mechanically replace every `let` with `const` just because the variable isn't reassigned.
+
+**No Defensive Coding.** Don't wrap code in try/catch "just in case". If something can't fail — don't catch. If it can fail — handle the specific error meaningfully or let it crash. Silent swallowing of exceptions hides bugs. Every catch must have a clear reason for existing.
+
+### Project files — rules
+
+- **`CLAUDE.md`** — current implemented state. Do NOT update after every change — only when the user explicitly asks. If the user asks to commit but forgets to update — remind them. Keep it short: only the main ideas and invariants — details live in the code.
+
 ## Tech Stack
 
 - **Desktop framework:** Tauri v2 (Rust backend + React frontend)
@@ -14,7 +58,7 @@ Voice dictation desktop app. Hotkey → mic capture → configurable STT provide
 - **Global hotkeys:** tauri-plugin-global-shortcut
 - **Overlay:** NSPanel (macOS) floating above fullscreen apps
 - **Settings:** tauri-plugin-store (JSON)
-- **History:** SQLite via rusqlite
+- **History:** JSON file (`history.json` in app data, atomic writes via tempfile)
 
 ## Project Structure
 
@@ -43,7 +87,7 @@ src-tauri/src/                # Rust backend
     export_import.rs          # Settings/history export/import
   active_app_context/         # Detect focused window (macOS Accessibility API)
   audio_mute/                 # Reduce/mute system audio volume during recording
-  history.rs                  # SQLite storage
+  history.rs                  # JSON storage; entries carry ok/failed/processing status
   settings.rs                 # Settings schema (hotkeys, STT providers, prompts)
   state.rs                    # App state (ShortcutState machine)
   events.rs                   # Event names & payload types
@@ -53,15 +97,16 @@ src-tauri/src/                # Rust backend
 
 1. **Hotkey** (lib.rs) → state machine transitions (Idle → Recording → Processing → Idle)
 2. **Mic capture** (cpal_impl.rs) → f32 PCM samples pushed into shared Arc<Mutex<Vec<f32>>>
-3. **WAV encode** (audio_encoder.rs) → 16-bit PCM WAV bytes
-4. **STT API** (stt.rs) → multipart or JSON request to active provider, returns transcription text
-5. **Trim** → leading/trailing whitespace stripped from transcription
-6. **LLM format** (llm.rs) → optional cleanup via Chat Completions
-7. **Prefix** → optional `paste_prefix` prepended (e.g. "🎙 ")
-8. **Paste** (text.rs) → clipboard set → Cmd+V simulation (keycode 0x09, layout-independent)
-9. **History** (history.rs) → save to SQLite, emit event
-10. **Frontend** listens to `recording-status-changed` events, overlay shows status
-11. **Cancel** → repeat hotkey during Processing aborts the pipeline (JoinHandle::abort)
+3. **WAV encode** (audio_encoder.rs) → 16-bit PCM WAV bytes, saved to `last_recording.wav` before any network call
+4. **History entry** created immediately with `processing` status ("Transcribing…" in the feed)
+5. **STT API** (stt.rs) → multipart / json / gemini request to active provider, returns transcription text
+6. **Trim** → leading/trailing whitespace stripped from transcription
+7. **LLM format** (llm.rs) → optional cleanup via Chat Completions
+8. **Prefix** → optional `paste_prefix` prepended (e.g. "🎙 ")
+9. **History entry updated** in place with the result — before pasting, so text survives paste failures; on error → `failed` with error text
+10. **Paste** (text.rs) → clipboard set → Cmd+V simulation (keycode 0x09, layout-independent)
+11. **Frontend** listens to `recording-status-changed` / `history-changed` events, overlay shows status
+12. **Cancel** → repeat hotkey during Processing aborts the pipeline (JoinHandle::abort); full cancel — the processing entry, WAV and meta are deleted
 
 ## Key Conventions
 
@@ -79,12 +124,8 @@ src-tauri/src/                # Rust backend
 - **STT prompt:** Global `stt_prompt` setting sent with every STT request as context hint. Supported by OpenAI Whisper; may be ignored by other providers (e.g. Groq via OpenRouter).
 - **Paste prefix:** Optional `paste_prefix` prepended to every transcription before pasting.
 - **Pipeline cancellation:** Repeating the toggle hotkey during Processing state aborts the running async task via `JoinHandle::abort()`. State machine tracks Processing separately and resets to Idle on cancel or pipeline completion.
-- **Re-transcription:** Every recording's WAV is saved to `last_recording.wav` (app data dir, single slot, overwritten by the next recording) before the STT call; `last_recording.json` links it to the history entry that owns it. On STT failure (or empty result) a `status: failed` history entry is created with the error text. The `retranscribe_last` command re-runs STT → LLM → prefix on the saved clip with *current* settings (so switching providers applies) and updates the owning entry in place — no Cmd+V paste (the app window is focused). Exposed in the history item context menu ("Re-transcribe"), shown only on the entry linked to the saved clip. A failed re-transcribe never wipes previously successful text (`mark_entry_failed` skips entries with text).
-
-## Working with Claude
-
-- **No plan mode** unless explicitly asked. Default: discuss the task first, then implement directly.
-- Workflow: discuss what needs to be done → agree on approach → implement. No autonomous planning.
+- **Re-transcription:** Every recording's WAV is saved to `last_recording.wav` (app data dir, single slot, overwritten by the next recording) before the STT call; `last_recording.json` links it to the history entry that owns it. The `retranscribe_last` command re-runs STT → LLM → prefix on the saved clip with *current* settings (so switching providers applies) and updates the owning entry in place — no Cmd+V paste (the app window is focused). Exposed in the history item context menu ("Re-transcribe"), shown only on the entry linked to the saved clip. During a re-transcribe the entry goes `processing` and the overlay shows the regular pipeline status events.
+- **History entry statuses:** `ok` | `failed` | `processing`. The entry is created as `processing` the moment recording stops and is updated in place. A failed re-transcribe of an entry with good text keeps the text (status returns to `ok`, the error is stored as a hint shown under the text). Stale `processing` entries become `failed` ("Interrupted (app restarted)") on load. The paste-last hotkey pastes the newest `ok` entry, skipping failed/processing ones.
 
 ## Build Commands
 

@@ -79,6 +79,7 @@ pub fn set_status_pub(orch: &RecordingOrchestrator, new_status: RecordingStatusP
 }
 
 /// Cancel the currently running pipeline (if any).
+/// Full cancel: the in-flight history entry and the saved clip are dropped.
 /// Returns true if a pipeline was actually cancelled.
 pub fn cancel_pipeline(app: &AppHandle, orch: &RecordingOrchestrator) -> bool {
     let handle = {
@@ -87,6 +88,20 @@ pub fn cancel_pipeline(app: &AppHandle, orch: &RecordingOrchestrator) -> bool {
     };
     if let Some(h) = handle {
         h.abort();
+
+        if let Some(entry_id) = get_last_recording_entry_id(app.clone()) {
+            if let Some(history) = app.try_state::<HistoryStorage>() {
+                match history.delete_entry_if_processing(&entry_id) {
+                    Ok(true) => {
+                        let _ = app.emit(EventName::HistoryChanged.as_str(), ());
+                    }
+                    Ok(false) => {}
+                    Err(e) => log::warn!("Failed to delete cancelled entry: {e:#}"),
+                }
+            }
+        }
+        clear_last_recording(app);
+
         set_status(&orch.status, RecordingStatus::Idle);
         emit_status(app, RecordingStatus::Idle);
         log::info!("Pipeline cancelled by user");
@@ -282,34 +297,65 @@ async fn run_pipeline(
     //    can be retried later (possibly with different settings/provider)
     save_last_recording_wav(app, &wav_data);
 
-    // 3. Transcribe + format (STT → LLM → prefix)
+    // 3. The entry appears in history immediately with a Processing status
+    let entry_id = if let Some(history) = app.try_state::<HistoryStorage>() {
+        match history.add_processing_entry() {
+            Ok(entry) => {
+                save_last_recording_meta(app, &entry.id);
+                let _ = app.emit(EventName::HistoryChanged.as_str(), ());
+                Some(entry.id)
+            }
+            Err(e) => {
+                log::warn!("Failed to add processing entry to history: {e:#}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // 4. Transcribe + format (STT → LLM → prefix)
     let (final_text, raw_text) = match transcribe_and_format(app, http_client, wav_data).await {
         Ok(Some(texts)) => texts,
         Ok(None) => {
             // Empty result also counts as a failed attempt: the clip stays
             // reachable so the user can re-transcribe with another provider
             log::info!("Empty transcription");
-            record_failed_attempt(app, "Transcription returned empty text".to_string());
+            finish_entry_failed(
+                app,
+                entry_id.as_deref(),
+                "Transcription returned empty text".to_string(),
+            );
             return Ok(());
         }
         Err(e) => {
-            record_failed_attempt(app, format!("{e:#}"));
+            finish_entry_failed(app, entry_id.as_deref(), format!("{e:#}"));
             return Err(e);
         }
     };
 
-    // 4. Add to history before pasting so the text survives a paste failure
+    // 5. Fill the entry before pasting so the text survives a paste failure
     if let Some(history) = app.try_state::<HistoryStorage>() {
-        match history.add_entry(final_text.clone(), raw_text, None) {
-            Ok(entry) => {
-                save_last_recording_meta(app, &entry.id);
-                let _ = app.emit(EventName::HistoryChanged.as_str(), ());
+        match &entry_id {
+            Some(id) => {
+                match history.update_entry_transcription(id, final_text.clone(), raw_text) {
+                    Ok(true) => {}
+                    Ok(false) => log::info!("History entry {id} was deleted before completion"),
+                    Err(e) => log::warn!("Failed to update history entry: {e:#}"),
+                }
             }
-            Err(e) => log::warn!("Failed to save to history: {e:#}"),
+            None => {
+                // Processing entry could not be created earlier; save the result anyway
+                match history.add_entry(final_text.clone(), raw_text, None) {
+                    Ok(entry) => save_last_recording_meta(app, &entry.id),
+                    Err(e) => log::warn!("Failed to save to history: {e:#}"),
+                }
+            }
         }
+        let _ = app.emit(EventName::HistoryChanged.as_str(), ());
     }
 
-    // 5. Paste text
+    // 6. Paste text
     let text_to_paste = final_text;
     let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
     app.run_on_main_thread(move || {
@@ -325,18 +371,17 @@ async fn run_pipeline(
     Ok(())
 }
 
-/// Keep a failed clip reachable: a failed entry in history owns the saved WAV
-fn record_failed_attempt(app: &AppHandle, message: String) {
+/// Mark the in-flight history entry as failed and refresh the feed
+fn finish_entry_failed(app: &AppHandle, entry_id: Option<&str>, message: String) {
+    let Some(id) = entry_id else {
+        log::warn!("Transcription failed with no history entry to record it: {message}");
+        return;
+    };
     if let Some(history) = app.try_state::<HistoryStorage>() {
-        match history.add_failed_entry(message) {
-            Ok(entry) => {
-                save_last_recording_meta(app, &entry.id);
-                let _ = app.emit(EventName::HistoryChanged.as_str(), ());
-            }
-            Err(history_error) => {
-                log::warn!("Failed to save failed entry to history: {history_error:#}");
-            }
+        if let Err(e) = history.mark_entry_failed(id, message) {
+            log::warn!("Failed to mark history entry as failed: {e:#}");
         }
+        let _ = app.emit(EventName::HistoryChanged.as_str(), ());
     }
 }
 
@@ -484,6 +529,14 @@ fn save_last_recording_meta(app: &AppHandle, entry_id: &str) {
     }
 }
 
+/// Remove the saved clip and its link entirely (full cancel)
+fn clear_last_recording(app: &AppHandle) {
+    if let Some((wav_path, meta_path)) = last_recording_paths(app) {
+        let _ = std::fs::remove_file(meta_path);
+        let _ = std::fs::remove_file(wav_path);
+    }
+}
+
 /// Load the saved clip and the ID of the history entry it belongs to
 fn load_last_recording(app: &AppHandle) -> Option<(String, Vec<u8>)> {
     let (wav_path, meta_path) = last_recording_paths(app)?;
@@ -530,12 +583,36 @@ pub async fn retranscribe_last(
     let (entry_id, wav_data) = load_last_recording(&app)
         .ok_or_else(|| "No saved recording available to re-transcribe".to_string())?;
 
-    let http_client = recording.http_client.clone();
-    let result = transcribe_and_format(&app, &http_client, wav_data).await;
-
     let history = app
         .try_state::<HistoryStorage>()
         .ok_or_else(|| "History storage is unavailable".to_string())?;
+
+    // Show progress: the entry switches to Processing, the overlay reuses the
+    // regular pipeline status events
+    match history.set_entry_processing(&entry_id) {
+        Ok(true) => {
+            let _ = app.emit(EventName::HistoryChanged.as_str(), ());
+        }
+        Ok(false) => {}
+        Err(e) => log::warn!("Failed to set entry processing: {e:#}"),
+    }
+    set_status(&recording.status, RecordingStatus::Processing);
+    emit_status(&app, RecordingStatus::Processing);
+
+    let http_client = recording.http_client.clone();
+    let result = transcribe_and_format(&app, &http_client, wav_data).await;
+
+    // Restore the overlay unless a new recording started meanwhile
+    {
+        let mut status = recording
+            .status
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if *status == RecordingStatus::Processing {
+            *status = RecordingStatus::Idle;
+            emit_status(&app, RecordingStatus::Idle);
+        }
+    }
 
     match result {
         Ok(Some((final_text, raw_text))) => {

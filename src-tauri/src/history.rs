@@ -40,6 +40,8 @@ pub enum TranscriptionStatus {
     #[default]
     Ok,
     Failed,
+    /// Transcription (or re-transcription) is currently in flight
+    Processing,
 }
 
 /// A single dictation history entry
@@ -97,7 +99,7 @@ impl HistoryStorage {
             let _ = fs::create_dir_all(parent);
         }
 
-        let data = match Self::load_from_file(&file_path) {
+        let mut data = match Self::load_from_file(&file_path) {
             Ok(history_data) => history_data,
             Err(error) => {
                 if file_path.exists() {
@@ -109,6 +111,14 @@ impl HistoryStorage {
                 HistoryData::default()
             }
         };
+
+        // Entries stuck in Processing (app was killed mid-pipeline) become Failed
+        for entry in &mut data.entries {
+            if entry.status == TranscriptionStatus::Processing {
+                entry.status = TranscriptionStatus::Failed;
+                entry.error = Some("Interrupted (app restarted)".to_string());
+            }
+        }
 
         Self {
             data: RwLock::new(data),
@@ -198,13 +208,12 @@ impl HistoryStorage {
         Ok(new_history_entry)
     }
 
-    /// Add a placeholder entry for a recording whose transcription failed
-    pub fn add_failed_entry(&self, error: String) -> Result<HistoryEntry> {
-        let mut failed_entry = HistoryEntry::new(String::new(), String::new(), None);
-        failed_entry.status = TranscriptionStatus::Failed;
-        failed_entry.error = Some(error);
-        self.insert(failed_entry.clone())?;
-        Ok(failed_entry)
+    /// Add a placeholder entry for a recording that is being transcribed
+    pub fn add_processing_entry(&self) -> Result<HistoryEntry> {
+        let mut processing_entry = HistoryEntry::new(String::new(), String::new(), None);
+        processing_entry.status = TranscriptionStatus::Processing;
+        self.insert(processing_entry.clone())?;
+        Ok(processing_entry)
     }
 
     /// Insert an entry at the top of the history and persist
@@ -256,9 +265,11 @@ impl HistoryStorage {
         Ok(updated)
     }
 
-    /// Mark an entry as failed unless it already holds a successful transcription
-    /// (a failed re-transcribe must not wipe previously good text).
-    /// Returns false if nothing was changed.
+    /// Record a failed transcription attempt on an entry.
+    /// An entry without successful text becomes `Failed`; an entry that already
+    /// holds good text keeps it (status returns to `Ok`) and only stores the
+    /// error as a hint — a failed re-transcribe must not wipe previous results.
+    /// Returns false if the entry no longer exists.
     pub fn mark_entry_failed(&self, id: &str, error: String) -> Result<bool> {
         let changed = {
             let mut history_data = self.data.write().map_err(|err| {
@@ -272,12 +283,16 @@ impl HistoryStorage {
                 .iter_mut()
                 .find(|entry| entry.id == id)
             {
-                Some(entry) if entry.text.is_empty() => {
-                    entry.status = TranscriptionStatus::Failed;
+                Some(entry) => {
+                    entry.status = if entry.text.is_empty() {
+                        TranscriptionStatus::Failed
+                    } else {
+                        TranscriptionStatus::Ok
+                    };
                     entry.error = Some(error);
                     true
                 }
-                _ => false,
+                None => false,
             }
         };
 
@@ -286,6 +301,64 @@ impl HistoryStorage {
         }
 
         Ok(changed)
+    }
+
+    /// Put an entry into the Processing state (re-transcription started).
+    /// Existing text is kept so it stays visible while the retry runs.
+    /// Returns false if the entry no longer exists.
+    pub fn set_entry_processing(&self, id: &str) -> Result<bool> {
+        let changed = {
+            let mut history_data = self.data.write().map_err(|err| {
+                anyhow::anyhow!(
+                    "Failed to acquire history write lock when setting entry {id} processing: {err}"
+                )
+            })?;
+
+            match history_data
+                .entries
+                .iter_mut()
+                .find(|entry| entry.id == id)
+            {
+                Some(entry) => {
+                    entry.status = TranscriptionStatus::Processing;
+                    entry.error = None;
+                    true
+                }
+                None => false,
+            }
+        };
+
+        if changed {
+            self.save()?;
+        }
+
+        Ok(changed)
+    }
+
+    /// Delete an entry only if it is still in the Processing state (pipeline cancel).
+    /// Returns true if the entry was deleted.
+    pub fn delete_entry_if_processing(&self, id: &str) -> Result<bool> {
+        let deleted = {
+            let mut history_data = self.data.write().map_err(|err| {
+                anyhow::anyhow!(
+                    "Failed to acquire history write lock when cancelling entry {id}: {err}"
+                )
+            })?;
+
+            let initial_entry_count = history_data.entries.len();
+            history_data
+                .entries
+                .retain(|entry| {
+                    entry.id != id || entry.status != TranscriptionStatus::Processing
+                });
+            history_data.entries.len() < initial_entry_count
+        };
+
+        if deleted {
+            self.save()?;
+        }
+
+        Ok(deleted)
     }
 
     /// Get all history entries (newest first), optionally limited
@@ -483,57 +556,95 @@ mod tests {
     }
 
     #[test]
-    fn failed_entry_lifecycle_supports_retranscription() {
+    fn entry_lifecycle_supports_retranscription() {
         let temporary_history_directory = TemporaryHistoryDirectory::new();
         let history_storage = HistoryStorage::new(temporary_history_directory.path.clone());
 
-        let failed_entry = history_storage
-            .add_failed_entry("STT unreachable".to_string())
-            .expect("failed to add failed entry");
-        assert_eq!(failed_entry.status, TranscriptionStatus::Failed);
-        assert_eq!(failed_entry.error.as_deref(), Some("STT unreachable"));
-        assert!(failed_entry.text.is_empty());
+        // Recording stops → entry appears immediately as Processing
+        let entry = history_storage
+            .add_processing_entry()
+            .expect("failed to add processing entry");
+        assert_eq!(entry.status, TranscriptionStatus::Processing);
+        assert!(entry.text.is_empty());
 
-        // A failed re-transcribe updates the error on an entry without text
+        // Pipeline fails → entry becomes Failed with the error text
         let marked = history_storage
-            .mark_entry_failed(&failed_entry.id, "Timeout".to_string())
+            .mark_entry_failed(&entry.id, "STT unreachable".to_string())
             .expect("failed to mark entry failed");
         assert!(marked);
-
-        // A successful re-transcribe replaces the failure with text
-        let updated = history_storage
-            .update_entry_transcription(
-                &failed_entry.id,
-                "Formatted".to_string(),
-                "Raw".to_string(),
-            )
-            .expect("failed to update entry transcription");
-        assert!(updated);
-
         let entries = history_storage.get_all(None).expect("failed to load");
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].status, TranscriptionStatus::Ok);
-        assert_eq!(entries[0].text, "Formatted");
-        assert_eq!(entries[0].raw_text, "Raw");
+        assert_eq!(entries[0].status, TranscriptionStatus::Failed);
+        assert_eq!(entries[0].error.as_deref(), Some("STT unreachable"));
+
+        // Re-transcribe starts → Processing again, error cleared
+        let set_processing = history_storage
+            .set_entry_processing(&entry.id)
+            .expect("failed to set entry processing");
+        assert!(set_processing);
+        let entries = history_storage.get_all(None).expect("failed to load");
+        assert_eq!(entries[0].status, TranscriptionStatus::Processing);
         assert!(entries[0].error.is_none());
 
-        // A later failed re-transcribe must not wipe the good text
-        let marked_again = history_storage
-            .mark_entry_failed(&failed_entry.id, "Timeout".to_string())
-            .expect("failed to mark entry failed");
-        assert!(!marked_again);
+        // Re-transcribe succeeds → Ok with text
+        let updated = history_storage
+            .update_entry_transcription(&entry.id, "Formatted".to_string(), "Raw".to_string())
+            .expect("failed to update entry transcription");
+        assert!(updated);
         let entries = history_storage.get_all(None).expect("failed to load");
-        assert_eq!(entries[0].text, "Formatted");
         assert_eq!(entries[0].status, TranscriptionStatus::Ok);
+        assert_eq!(entries[0].text, "Formatted");
+        assert!(entries[0].error.is_none());
+
+        // A later failed re-transcribe keeps the good text, stores the error hint
+        let marked_again = history_storage
+            .mark_entry_failed(&entry.id, "Timeout".to_string())
+            .expect("failed to mark entry failed");
+        assert!(marked_again);
+        let entries = history_storage.get_all(None).expect("failed to load");
+        assert_eq!(entries[0].status, TranscriptionStatus::Ok);
+        assert_eq!(entries[0].text, "Formatted");
+        assert_eq!(entries[0].error.as_deref(), Some("Timeout"));
+
+        // Cancel deletes an entry only while it is Processing
+        let not_deleted = history_storage
+            .delete_entry_if_processing(&entry.id)
+            .expect("failed to call cancel delete");
+        assert!(!not_deleted);
+        history_storage
+            .set_entry_processing(&entry.id)
+            .expect("failed to set entry processing");
+        let deleted = history_storage
+            .delete_entry_if_processing(&entry.id)
+            .expect("failed to cancel-delete processing entry");
+        assert!(deleted);
+        assert!(history_storage.get_all(None).expect("failed to load").is_empty());
 
         // Updating a deleted entry reports false
-        history_storage
-            .delete(&failed_entry.id)
-            .expect("failed to delete entry");
         let updated_missing = history_storage
-            .update_entry_transcription(&failed_entry.id, String::new(), String::new())
+            .update_entry_transcription(&entry.id, String::new(), String::new())
             .expect("failed to call update on missing entry");
         assert!(!updated_missing);
+    }
+
+    #[test]
+    fn stale_processing_entries_become_failed_on_load() {
+        let temporary_history_directory = TemporaryHistoryDirectory::new();
+        {
+            let history_storage = HistoryStorage::new(temporary_history_directory.path.clone());
+            history_storage
+                .add_processing_entry()
+                .expect("failed to add processing entry");
+        }
+
+        // Simulates an app restart while a pipeline was in flight
+        let reloaded_storage = HistoryStorage::new(temporary_history_directory.path.clone());
+        let entries = reloaded_storage.get_all(None).expect("failed to load");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].status, TranscriptionStatus::Failed);
+        assert_eq!(
+            entries[0].error.as_deref(),
+            Some("Interrupted (app restarted)")
+        );
     }
 
     #[test]

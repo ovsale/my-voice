@@ -223,19 +223,23 @@ fn stop_recording(
     let _ = app.emit(EventName::RecordingStop.as_str(), ());
 }
 
-/// Paste the last transcription from history
+/// Paste the last successful transcription from history
+/// (processing/failed entries have no usable text and are skipped)
 #[cfg(desktop)]
 fn paste_last_transcription(app: &AppHandle) {
     log::info!("PasteLast: pasting last transcription");
     let history_storage = app.state::<HistoryStorage>();
 
-    if let Ok(entries) = history_storage.get_all(Some(1)) {
-        if let Some(entry) = entries.first() {
+    if let Ok(entries) = history_storage.get_all(None) {
+        let last_successful = entries.iter().find(|entry| {
+            entry.status == history::TranscriptionStatus::Ok && !entry.text.is_empty()
+        });
+        if let Some(entry) = last_successful {
             if let Err(e) = commands::text::type_text_blocking(&entry.text) {
                 log::error!("Failed to paste last transcription: {e}");
             }
         } else {
-            log::info!("PasteLast: no history entries available");
+            log::info!("PasteLast: no successful history entries available");
         }
     }
 }

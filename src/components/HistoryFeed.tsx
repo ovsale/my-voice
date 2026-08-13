@@ -111,8 +111,40 @@ const HistoryItem = memo(function HistoryItem({
 						Transcription failed
 						{entry.error ? `: ${entry.error}` : ""}
 					</p>
+				) : entry.status === "processing" && !entry.text ? (
+					<p
+						className="history-text"
+						style={{ color: "var(--text-tertiary)", fontStyle: "italic" }}
+					>
+						Transcribing…
+					</p>
 				) : (
-					<p className="history-text">{entry.text}</p>
+					<>
+						<p className="history-text">{entry.text}</p>
+						{entry.status === "processing" && (
+							<p
+								style={{
+									color: "var(--text-tertiary)",
+									fontStyle: "italic",
+									fontSize: 12,
+									margin: "4px 0 0",
+								}}
+							>
+								Re-transcribing…
+							</p>
+						)}
+						{entry.status === "ok" && entry.error && (
+							<p
+								style={{
+									color: "var(--mantine-color-red-5)",
+									fontSize: 12,
+									margin: "4px 0 0",
+								}}
+							>
+								Last re-transcribe failed: {entry.error}
+							</p>
+						)}
+					</>
 				)}
 				{isExpanded && (
 					<div className="history-raw-text">
@@ -169,9 +201,11 @@ const HistoryItem = memo(function HistoryItem({
 							<Menu.Item
 								leftSection={<RefreshCw size={14} />}
 								onClick={onRetranscribe}
-								disabled={isRetranscribing}
+								disabled={isRetranscribing || entry.status === "processing"}
 							>
-								{isRetranscribing ? "Re-transcribing..." : "Re-transcribe"}
+								{isRetranscribing || entry.status === "processing"
+									? "Re-transcribing..."
+									: "Re-transcribe"}
 							</Menu.Item>
 						)}
 						<Menu.Item
